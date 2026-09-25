@@ -94,14 +94,14 @@ export async function getProducts(req, res) {
 
     const { sql, params, limit, offset } = buildProductQuery(filters)
 
-    const countSql = sql.replace(
-      'SELECT p.*, c.name as category_name, c.slug as category_slug, b.name as brand_name, b.slug as brand_slug, (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image',
-      'SELECT COUNT(*) as total'
-    ).replace(/ORDER BY.*$/, '').replace(/LIMIT.*$/, '')
+    const whereMatch = sql.match(/WHERE[\s\S]*?(?=ORDER BY|LIMIT|$)/)
+    const whereClause = whereMatch ? `WHERE ${whereMatch[0].replace(/^WHERE\s*/, '').trim()}` : 'WHERE p.deleted_at IS NULL'
+    const countSql = `SELECT COUNT(*) as total FROM products p LEFT JOIN categories c ON p.category_id = c.id LEFT JOIN brands b ON p.brand_id = b.id ${whereClause}`
+    const whereParams = params.slice(0, Math.max(0, params.length - 2))
 
     const [products, countResult] = await Promise.all([
       query(sql, params),
-      queryOne(countSql, params.slice(0, -2)),
+      queryOne(countSql, whereParams),
     ])
 
     const total = countResult?.total || 0
