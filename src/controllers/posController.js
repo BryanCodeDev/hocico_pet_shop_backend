@@ -846,7 +846,7 @@ export async function getPosReportsSummary(req, res) {
                 u.first_name, u.last_name
          FROM cash_registers cr
          JOIN users u ON cr.user_id = u.id
-         WHERE cr.created_at >= ? AND cr.created_at <= ?
+         WHERE cr.opened_at >= ? AND cr.opened_at <= ?
          ORDER BY cr.opened_at DESC
          LIMIT 10`,
         [dateFrom, dateTo]
