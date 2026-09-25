@@ -26,7 +26,10 @@ function setTokenCookie(res, token) {
 }
 
 function clearTokenCookie(res) {
-  res.clearCookie('token', COOKIE_OPTIONS)
+  // clearCookie no debe recibir maxAge/expires (deprecado desde Express 4.x
+  // hacia la v5) — solo las opciones que identifican la cookie a borrar.
+  const { httpOnly, secure, sameSite } = COOKIE_OPTIONS
+  res.clearCookie('token', { httpOnly, secure, sameSite })
 }
 
 export async function register(req, res) {

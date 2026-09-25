@@ -382,6 +382,14 @@ function splitSqlStatements(sql) {
     })
 }
 
+const BENIGN_MIGRATION_CODES = new Set([
+  'ER_TABLE_EXISTS_ERROR',
+  'ER_DUP_KEYNAME',
+  'ER_DUP_ENTRY',
+  'ER_FK_DUP_NAME',
+  'ER_DUP_FIELDNAME',
+])
+
 export async function runMigrations() {
   console.log('🔄 Running migrations...')
   for (let i = 0; i < migrations.length; i++) {
@@ -389,6 +397,10 @@ export async function runMigrations() {
       await query(migrations[i])
       console.log(`✅ Migration ${i + 1} completed`)
     } catch (error) {
+      if (BENIGN_MIGRATION_CODES.has(error.code)) {
+        console.log(`~ Migration ${i + 1} skipped (ya existía: ${error.code})`)
+        continue
+      }
       console.error(`❌ Migration ${i + 1} failed:`, error.message)
       throw error
     }
