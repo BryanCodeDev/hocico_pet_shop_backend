@@ -143,3 +143,36 @@ export const stockAdjustValidation = [
   body('reason').optional().trim().isLength({ max: 255 }),
   validate,
 ]
+
+export const posSaleValidation = [
+  body('items').isArray({ min: 1 }).withMessage('El pedido debe tener al menos un producto'),
+  body('items.*.productId').isInt({ min: 1 }).withMessage('Producto inválido'),
+  body('items.*.quantity').isInt({ min: 1 }).withMessage('Cantidad inválida'),
+  body('paymentMethod').isIn(['cash', 'card_pos']).withMessage('Método de pago inválido para POS'),
+  body('cashReceived').optional().isFloat({ min: 0 }).withMessage('Monto recibido inválido'),
+  body('customerDocumentType').optional().isIn(['CC', 'NIT', 'CE', 'PASSPORT']).withMessage('Tipo de documento inválido'),
+  body('customerDocumentNumber').optional().trim().isLength({ max: 20 }).withMessage('Número de documento inválido'),
+  body('customerName').optional().trim().isLength({ max: 200 }),
+  body('customerEmail').optional().isEmail().normalizeEmail(),
+  body('customerPhone').optional().trim().isLength({ max: 50 }),
+  body('notes').optional().trim(),
+  validate,
+]
+
+export const cashRegisterOpenValidation = [
+  body('openingAmount').isFloat({ min: 0 }).withMessage('Monto de apertura inválido'),
+  body('notes').optional().trim(),
+  validate,
+]
+
+export const cashRegisterCloseValidation = [
+  body('closingAmount').isFloat({ min: 0 }).withMessage('Monto de cierre inválido'),
+  body('notes').optional().trim(),
+  validate,
+]
+
+export const dateRangeValidation = [
+  query('from').optional().isISO8601().withMessage('Fecha de inicio inválida'),
+  query('to').optional().isISO8601().toDate().withMessage('Fecha de fin inválida'),
+  validate,
+]

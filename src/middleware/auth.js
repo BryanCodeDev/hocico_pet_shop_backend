@@ -19,13 +19,20 @@ export async function authenticate(req, res, next) {
     }
 
     const user = await queryOne(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.address, u.city, u.province, u.avatar_url, u.is_active, r.name as role
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.address, u.city, u.province, u.avatar_url, u.is_active, r.name as role, r.permissions
        FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = ?`,
       [decoded.id]
     )
 
     if (!user || !user.is_active) {
       return res.status(401).json({ error: 'Usuario no encontrado o desactivado' })
+    }
+
+    let permissions = null
+    try {
+      permissions = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions
+    } catch {
+      permissions = null
     }
 
     req.user = {
@@ -39,6 +46,7 @@ export async function authenticate(req, res, next) {
       province: user.province,
       avatarUrl: user.avatar_url,
       role: user.role,
+      permissions,
     }
 
     next()
@@ -54,7 +62,33 @@ export function authorize(...allowedRoles) {
       return res.status(401).json({ error: 'No autenticado' })
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
+    if (allowedRoles.includes(req.user.role)) {
+      return next()
+    }
+
+    return res.status(403).json({ error: 'No tienes permisos para esta acción' })
+  }
+}
+
+export function requirePermission(module, action) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'No autenticado' })
+    }
+
+    if (req.user.role === 'admin') {
+      return next()
+    }
+
+    const perms = req.user.permissions
+    if (!perms) {
+      return res.status(403).json({ error: 'No tienes permisos para esta acción' })
+    }
+
+    const modulePerms = perms[module]
+    const hasAction = Array.isArray(modulePerms) && modulePerms.includes(action)
+
+    if (!hasAction) {
       return res.status(403).json({ error: 'No tienes permisos para esta acción' })
     }
 

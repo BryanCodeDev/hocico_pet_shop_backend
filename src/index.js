@@ -17,6 +17,7 @@ import adminRoutes from './routes/admin.js'
 import shippingRoutes from './routes/shipping.js'
 import invoiceRoutes from './routes/invoices.js'
 import stockRoutes from './routes/stock.js'
+import posRoutes from './routes/pos.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { notFound } from './middleware/notFound.js'
 
@@ -64,6 +65,7 @@ app.use('/api/admin', adminRoutes)
 app.use('/api/shipping-zones', shippingRoutes)
 app.use('/api/admin/invoices', invoiceRoutes)
 app.use('/api/admin/stock', stockRoutes)
+app.use('/api/pos', posRoutes)
 
 app.use(notFound)
 app.use(errorHandler)

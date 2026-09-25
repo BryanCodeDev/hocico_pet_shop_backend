@@ -9,10 +9,10 @@
 -- ROLES
 -- ------------------------------------------------------------
 INSERT IGNORE INTO `roles` (`id`, `name`, `description`, `permissions`) VALUES
-(1, 'admin', 'Administrador de la tienda', JSON_OBJECT('all', TRUE)),
-(2, 'user', 'Cliente registrado', JSON_OBJECT('orders', JSON_ARRAY('read', 'create'), 'profile', JSON_ARRAY('read', 'update'), 'cart', JSON_ARRAY('read', 'create', 'update', 'delete'))),
-(3, 'guest', 'Cuenta invitada / soporte', JSON_OBJECT('cart', JSON_ARRAY('read', 'create', 'update', 'delete'))),
-(4, 'cashier', 'Cajero de punto de venta', JSON_OBJECT('pos', JSON_ARRAY('read', 'create'), 'cash_registers', JSON_ARRAY('read', 'create', 'update')));
+(1, 'admin', 'Administrador de la tienda', JSON_ARRAY('users.read', 'users.write', 'users.delete', 'products.read', 'products.write', 'products.delete', 'categories.read', 'categories.write', 'categories.delete', 'orders.read', 'orders.write', 'orders.delete', 'invoices.read', 'invoices.write', 'settings.read', 'settings.write', 'dashboard.read', 'pos.access', 'pos.sell', 'cash_register.open', 'cash_register.close', 'reports.read')),
+(2, 'user', 'Cliente registrado', JSON_ARRAY('orders.own.read', 'profile.read', 'profile.write', 'cart.read', 'cart.write', 'wishlist.read', 'wishlist.write')),
+(3, 'guest', 'Cuenta invitada / soporte', JSON_ARRAY()),
+(4, 'cashier', 'Cajero punto de venta', JSON_ARRAY('pos.access', 'pos.sell', 'cash_register.open', 'cash_register.close', 'products.read', 'orders.read', 'orders.write'));
 
 -- ------------------------------------------------------------
 -- USUARIO ADMIN
@@ -20,6 +20,12 @@ INSERT IGNORE INTO `roles` (`id`, `name`, `description`, `permissions`) VALUES
 -- ------------------------------------------------------------
 INSERT IGNORE INTO `users` (`first_name`, `last_name`, `email`, `password_hash`, `role_id`, `phone`, `city`, `province`, `is_active`, `email_verified`) VALUES
 ('Hocico', 'Admin', 'admin@hocicopetshop.com', '$2a$12$kzlsqHY/QgEcOxqnX22zv.P1h.oRrupoNzW.2jBDdUfy5lAu1nRyi', 1, '3133245600', 'Mosquera', 'Cundinamarca', TRUE, TRUE);
+
+-- ------------------------------------------------------------
+-- USUARIO CAJERO DEMO
+-- ------------------------------------------------------------
+INSERT IGNORE INTO `users` (`first_name`, `last_name`, `email`, `password_hash`, `role_id`, `phone`, `city`, `province`, `is_active`, `email_verified`) VALUES
+('Cajero', 'Demo', 'cajero@hocicopetshop.com', '$2a$12$kzlsqHY/QgEcOxqnX22zv.P1h.oRrupoNzW.2jBDdUfy5lAu1nRyi', 4, '3133245601', 'Mosquera', 'Cundinamarca', TRUE, TRUE);
 
 -- ------------------------------------------------------------
 -- CATEGORÍAS (jerárquicas: Alimentos > Perro/Gato)
@@ -49,16 +55,16 @@ INSERT IGNORE INTO `shipping_zones` (`city`, `cost`) VALUES
 ('Funza', 5000);
 
 -- ------------------------------------------------------------
--- PRODUCTOS
+-- PRODUCTOS (con códigos de barra para POS)
 -- ------------------------------------------------------------
 INSERT INTO `products` (
-  `category_id`, `brand_id`, `name`, `slug`, `sku`, `short_description`, `description`,
+  `category_id`, `brand_id`, `name`, `slug`, `sku`, `barcode`, `short_description`, `description`,
   `specifications`, `features`, `warranty`, `price`, `original_price`, `discount_percent`,
   `cost_price`, `stock`, `min_stock`, `weight`, `dimensions`, `is_active`, `is_featured`,
   `is_new`, `is_on_sale`, `meta_title`, `meta_description`
 ) VALUES
 
-(2, 1, 'Hill''s Science Diet Adult Perro 15kg', 'hills-adult-perro-15kg', 'ALI-PERRO-001',
+(2, 1, 'Hill''s Science Diet Adult Perro 15kg', 'hills-adult-perro-15kg', 'ALI-PERRO-001', '7791234567890',
  'Alimento científico para perros adultos, cuidado digestivo y piel saludable.',
  '<p>Fórmula balanceada con nutrientes de alta calidad para perros adultos. Favorece la digestión, mantiene el peso ideal y da brillo al pelaje.</p>',
  JSON_OBJECT('Presentación', '15 kg', 'Edad', 'Adulto', 'Especie', 'Perro'),
@@ -66,7 +72,7 @@ INSERT INTO `products` (
  'No aplica', 289900, NULL, 0, 210000, 15, 3, 15.000, '60 x 40 x 15 cm',
  TRUE, TRUE, FALSE, FALSE, 'Hill''s Adult Perro 15kg', 'Alimento Hill''s para perros adultos, bolsa de 15kg.'),
 
-(3, 1, 'Hill''s Science Diet Adult Gato 3kg', 'hills-adult-gato-3kg', 'ALI-GATO-001',
+(3, 1, 'Hill''s Science Diet Adult Gato 3kg', 'hills-adult-gato-3kg', 'ALI-GATO-001', '7791234567891',
  'Alimento científico para gatos adultos, salud urinaria y pelo brillante.',
  '<p>Nutrición balanceada que ayuda a mantener la salud del tracto urinario y un pelaje brillante en gatos adultos.</p>',
  JSON_OBJECT('Presentación', '3 kg', 'Edad', 'Adulto', 'Especie', 'Gato'),
@@ -74,7 +80,7 @@ INSERT INTO `products` (
  'No aplica', 89900, NULL, 0, 65000, 20, 5, 3.000, '30 x 20 x 8 cm',
  TRUE, TRUE, FALSE, FALSE, 'Hill''s Adult Gato 3kg', 'Alimento Hill''s para gatos adultos, bolsa de 3kg.'),
 
-(2, 2, 'Agility Gold Cachorro Premios 500g', 'agility-gold-cachorro-premios-500g', 'SNK-PERRO-001',
+(2, 2, 'Agility Gold Cachorro Premios 500g', 'agility-gold-cachorro-premios-500g', 'SNK-PERRO-001', '7791234567892',
  'Snack de premio para cachorros, ideal para entrenamiento.',
  '<p>Premios crocantes formulados para cachorros, ideales para reforzar el entrenamiento y la buena conducta.</p>',
  JSON_OBJECT('Presentación', '500 g', 'Edad', 'Cachorro', 'Especie', 'Perro'),
@@ -82,7 +88,7 @@ INSERT INTO `products` (
  'No aplica', 22900, NULL, 0, 15000, 30, 8, 0.500, '20 x 15 x 5 cm',
  TRUE, FALSE, TRUE, FALSE, 'Agility Gold Premios Cachorro', 'Snack premio Agility Gold para cachorros, 500g.'),
 
-(4, 3, 'Hueso Prensado Natural para Perro', 'hueso-prensado-natural-perro', 'SNK-PERRO-002',
+(4, 3, 'Hueso Prensado Natural para Perro', 'hueso-prensado-natural-perro', 'SNK-PERRO-002', '7791234567893',
  'Hueso prensado 100% natural, ayuda a la limpieza dental.',
  '<p>Snack masticable de larga duración que ayuda a reducir el sarro y mantener los dientes limpios.</p>',
  JSON_OBJECT('Presentación', 'Unidad', 'Especie', 'Perro'),
@@ -90,7 +96,7 @@ INSERT INTO `products` (
  'No aplica', 12900, NULL, 0, 7500, 40, 10, 0.150, '18 x 5 x 5 cm',
  TRUE, FALSE, FALSE, FALSE, 'Hueso Prensado Natural', 'Hueso prensado natural para la limpieza dental de tu perro.'),
 
-(5, 3, 'Correa Retráctil para Perro 5m', 'correa-retractil-perro-5m', 'ACC-PERRO-001',
+(5, 3, 'Correa Retráctil para Perro 5m', 'correa-retractil-perro-5m', 'ACC-PERRO-001', '7791234567894',
  'Correa retráctil resistente, ideal para paseos cómodos y seguros.',
  '<p>Correa retráctil de 5 metros con freno de seguridad, mango ergonómico y cinta resistente.</p>',
  JSON_OBJECT('Longitud', '5 m', 'Material', 'Nylon reforzado'),
@@ -98,7 +104,7 @@ INSERT INTO `products` (
  '3 meses', 45900, 59900, 23, 28000, 25, 5, 0.300, '15 x 10 x 8 cm',
  TRUE, TRUE, FALSE, TRUE, 'Correa Retráctil 5m', 'Correa retráctil para perro, 5 metros, con freno de seguridad.'),
 
-(5, 3, 'Cama Acolchada para Mascota Talla M', 'cama-acolchada-mascota-talla-m', 'ACC-CAMA-001',
+(5, 3, 'Cama Acolchada para Mascota Talla M', 'cama-acolchada-mascota-talla-m', 'ACC-CAMA-001', '7791234567895',
  'Cama suave y acolchada, lavable, ideal para perros y gatos medianos.',
  '<p>Cama redonda acolchada con base antideslizante, funda desmontable y lavable a máquina.</p>',
  JSON_OBJECT('Talla', 'M', 'Diámetro', '60 cm', 'Lavable', 'Sí'),
@@ -106,7 +112,7 @@ INSERT INTO `products` (
  '3 meses', 69900, NULL, 0, 42000, 12, 3, 0.900, '60 x 60 x 15 cm',
  TRUE, FALSE, TRUE, FALSE, 'Cama Acolchada Talla M', 'Cama acolchada lavable para perros y gatos, talla mediana.'),
 
-(6, 3, 'Shampoo Hipoalergénico para Mascotas 500ml', 'shampoo-hipoalergenico-mascotas-500ml', 'HIG-SHAMP-001',
+(6, 3, 'Shampoo Hipoalergénico para Mascotas 500ml', 'shampoo-hipoalergenico-mascotas-500ml', 'HIG-SHAMP-001', '7791234567896',
  'Shampoo suave para piel sensible, deja el pelaje brillante y sedoso.',
  '<p>Fórmula hipoalergénica libre de parabenos, ideal para mascotas con piel sensible.</p>',
  JSON_OBJECT('Presentación', '500 ml', 'Tipo', 'Hipoalergénico'),

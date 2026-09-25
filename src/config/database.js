@@ -54,12 +54,26 @@ export async function connectDB() {
   }
 }
 
-export async function query(sql, params) {
+/**
+ * Ejecuta una query.
+ *
+ * @param {string} sql
+ * @param {Array} params
+ * @param {object} [options]
+ * @param {string[]} [options.silentCodes] - Códigos de error MySQL que NO
+ *   deben imprimirse en consola (por ejemplo, errores "benignos" esperados
+ *   como columnas/índices/FKs duplicados durante migraciones idempotentes).
+ *   El error igual se relanza para que el caller decida qué hacer.
+ */
+export async function query(sql, params, options = {}) {
+  const { silentCodes = [] } = options
   try {
     const [rows] = await pool.execute(sql, params)
     return rows
   } catch (error) {
-    console.error('Query error:', error)
+    if (!silentCodes.includes(error.code)) {
+      console.error('Query error:', error.message)
+    }
     throw error
   }
 }

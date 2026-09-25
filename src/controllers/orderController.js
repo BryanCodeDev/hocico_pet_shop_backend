@@ -4,6 +4,155 @@ import { generateOrderNumber } from '../utils/helpers.js'
 
 const ORDER_STATUSES = ['pending', 'paid', 'preparing', 'shipped', 'delivered', 'cancelled', 'refunded']
 
+export async function createOrderCore(conn, orderData) {
+  const {
+    items,
+    shippingCost = 0,
+    channel = 'online',
+    paymentMethod,
+    status = 'pending',
+    paymentStatus = 'pending',
+    cashRegisterId = null,
+    paidAt = null,
+    customerName,
+    customerEmail,
+    customerPhone,
+    address,
+    city,
+    province,
+    notes,
+    customerDocumentType,
+    customerDocumentNumber,
+    userId,
+    orderNumber,
+  } = orderData
+
+  const docType = customerDocumentType || 'CC'
+  const docNumber = (customerDocumentNumber || '').toString()
+
+  let subtotal = 0
+  let discount = 0
+  const orderItems = []
+
+  for (const item of items) {
+    const quantity = Number(item.quantity)
+    const [productRows] = await conn.execute(
+      `SELECT id, name, price, original_price, sku, slug, stock
+       FROM products
+       WHERE id = ? AND deleted_at IS NULL
+       FOR UPDATE`,
+      [item.productId]
+    )
+    const product = productRows[0]
+
+    if (!product) {
+      throw new Error(`Producto ${item.productId} no encontrado`)
+    }
+
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new Error(`Cantidad inválida para el producto ${item.productId}`)
+    }
+
+    if (product.stock < quantity) {
+      const error = new Error(`Stock insuficiente para ${product.name}`)
+      error.code = 'STOCK_INSUFFICIENT'
+      throw error
+    }
+
+    const unitPrice = Math.round(Number(product.price) * 100) / 100
+    const originalPrice = Math.round(Number(product.original_price || 0) * 100) / 100
+    const lineDiscount = originalPrice > unitPrice ? originalPrice - unitPrice : 0
+    const itemSubtotal = Math.round(unitPrice * quantity * 100) / 100
+
+    subtotal = Math.round((subtotal + itemSubtotal) * 100) / 100
+    discount = Math.round((discount + lineDiscount * quantity) * 100) / 100
+
+    await conn.execute(
+      `INSERT INTO order_items (order_id, product_id, product_name, product_sku, product_slug, quantity, unit_price, discount_price, subtotal)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        0,
+        product.id,
+        product.name,
+        product.sku,
+        product.slug,
+        quantity,
+        unitPrice,
+        lineDiscount > 0 ? unitPrice : null,
+        itemSubtotal,
+      ]
+    )
+
+    await conn.execute('UPDATE products SET stock = stock - ? WHERE id = ?', [quantity, product.id])
+
+    orderItems.push({ productId: product.id, quantity, name: product.name })
+  }
+
+  const total = Math.round((subtotal - discount + shippingCost) * 100) / 100
+
+  const [orderResult] = await conn.execute(
+    `INSERT INTO orders (
+      user_id, order_number, channel, status, payment_status, payment_method,
+      subtotal, discount, shipping_cost, total, currency, external_reference,
+      customer_name, customer_email, customer_phone, customer_document_type, customer_document_number,
+      address, city, province, notes, cash_register_id, paid_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'COP', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userId,
+      orderNumber,
+      channel,
+      status,
+      paymentStatus,
+      paymentMethod,
+      subtotal,
+      discount,
+      shippingCost,
+      total,
+      orderNumber,
+      customerName,
+      customerEmail,
+      customerPhone,
+      docType,
+      docNumber,
+      address,
+      city,
+      province,
+      notes || null,
+      cashRegisterId,
+      paidAt,
+    ]
+  )
+
+  const createdOrderId = orderResult.insertId
+
+  for (const item of items) {
+    await conn.execute(
+      `UPDATE order_items SET order_id = ?
+       WHERE order_id = 0
+         AND product_id = ?
+         AND product_sku = ?
+       LIMIT 1`,
+      [createdOrderId, item.productId, item.sku]
+    )
+  }
+
+  for (const oi of orderItems) {
+    await conn.execute(
+      `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_type, reference_id, created_by)
+       VALUES (?, 'out', ?, ?, 'order', ?, ?)`,
+      [oi.productId, oi.quantity, `Pedido ${orderNumber}`, createdOrderId, userId]
+    )
+  }
+
+  await conn.execute(
+    `INSERT INTO order_status_history (order_id, status, previous_status, changed_by, notes)
+     VALUES (?, ?, NULL, ?, ?)`,
+    [createdOrderId, status, userId, `Pedido creado`]
+  )
+
+  return { orderId: createdOrderId, orderNumber, total, subtotal, discount, shippingCost }
+}
+
 export async function createOrder(req, res) {
   const errors = validationResult(req)
   if (!errors.isEmpty()) {
@@ -12,143 +161,44 @@ export async function createOrder(req, res) {
 
   try {
     const { customerName, customerEmail, customerPhone, address, city, notes, items, paymentMethod, customerDocumentType, customerDocumentNumber } = req.body
-    const docType = customerDocumentType || 'CC'
-    const docNumber = (customerDocumentNumber || '').toString()
     const normalizedPaymentMethod = paymentMethod === 'mercadopago' ? 'wompi' : paymentMethod
     const province = (req.body.province || req.body.department || '').trim()
     const userId = req.user?.id || null
     const orderNumber = generateOrderNumber()
 
-    const orderId = await transaction(async (conn) => {
-      const [zoneRows] = await conn.execute(
-        `SELECT cost FROM shipping_zones
-         WHERE LOWER(TRIM(city)) = LOWER(TRIM(?)) AND is_active = TRUE
-         LIMIT 1`,
-        [city]
-      )
-      const shippingCost = zoneRows.length
-        ? Math.round(parseFloat(zoneRows[0].cost) * 100) / 100
-        : 0
+    const [zoneRows] = await query(
+      `SELECT cost FROM shipping_zones
+       WHERE LOWER(TRIM(city)) = LOWER(TRIM(?)) AND is_active = TRUE
+       LIMIT 1`,
+      [city]
+    )
+    const shippingCost = zoneRows.length
+      ? Math.round(parseFloat(zoneRows[0].cost) * 100) / 100
+      : 0
 
-      let subtotal = 0
-      let discount = 0
-      const orderItems = []
-
-      for (const item of items) {
-        const quantity = Number(item.quantity)
-        const [productRows] = await conn.execute(
-          `SELECT id, name, price, original_price, sku, slug, stock
-           FROM products
-           WHERE id = ? AND deleted_at IS NULL
-           FOR UPDATE`,
-          [item.productId]
-        )
-        const product = productRows[0]
-
-        if (!product) {
-          throw new Error(`Producto ${item.productId} no encontrado`)
-        }
-
-        if (!Number.isInteger(quantity) || quantity < 1) {
-          throw new Error(`Cantidad inválida para el producto ${item.productId}`)
-        }
-
-        if (product.stock < quantity) {
-          const error = new Error(`Stock insuficiente para ${product.name}`)
-          error.code = 'STOCK_INSUFFICIENT'
-          throw error
-        }
-
-        const unitPrice = Math.round(Number(product.price) * 100) / 100
-        const originalPrice = Math.round(Number(product.original_price || 0) * 100) / 100
-        const lineDiscount = originalPrice > unitPrice ? originalPrice - unitPrice : 0
-        const itemSubtotal = Math.round(unitPrice * quantity * 100) / 100
-
-        subtotal = Math.round((subtotal + itemSubtotal) * 100) / 100
-        discount = Math.round((discount + lineDiscount * quantity) * 100) / 100
-
-        await conn.execute(
-          `INSERT INTO order_items (order_id, product_id, product_name, product_sku, product_slug, quantity, unit_price, discount_price, subtotal)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            0,
-            product.id,
-            product.name,
-            product.sku,
-            product.slug,
-            quantity,
-            unitPrice,
-            lineDiscount > 0 ? unitPrice : null,
-            itemSubtotal,
-          ]
-        )
-
-        await conn.execute('UPDATE products SET stock = stock - ? WHERE id = ?', [quantity, product.id])
-
-        orderItems.push({ productId: product.id, quantity, name: product.name })
-      }
-
-      const total = Math.round((subtotal - discount + shippingCost) * 100) / 100
-
-      const [orderResult] = await conn.execute(
-        `INSERT INTO orders (
-          user_id, order_number, status, payment_status, payment_method,
-          subtotal, discount, shipping_cost, total, currency, external_reference,
-          customer_name, customer_email, customer_phone, customer_document_type, customer_document_number,
-          address, city, province, notes
-        ) VALUES (?, ?, 'pending', 'pending', ?, ?, ?, ?, ?, 'COP', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          userId,
-          orderNumber,
-          normalizedPaymentMethod,
-          subtotal,
-          discount,
-          shippingCost,
-          total,
-          orderNumber,
-          customerName,
-          customerEmail,
-          customerPhone,
-          docType,
-          docNumber,
-          address,
-          city,
-          province,
-          notes || null,
-        ]
-      )
-
-      const createdOrderId = orderResult.insertId
-
-      for (const item of items) {
-        await conn.execute(
-          `UPDATE order_items SET order_id = ?
-           WHERE order_id = 0
-             AND product_id = ?
-             AND product_sku = ?
-           LIMIT 1`,
-          [createdOrderId, item.productId, item.sku]
-        )
-      }
-
-      for (const oi of orderItems) {
-        await conn.execute(
-          `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_type, reference_id, created_by)
-           VALUES (?, 'out', ?, ?, 'order', ?, ?)`,
-          [oi.productId, oi.quantity, `Pedido ${orderNumber}`, createdOrderId, userId]
-        )
-      }
-
-      await conn.execute(
-        `INSERT INTO order_status_history (order_id, status, previous_status, changed_by, notes)
-         VALUES (?, 'pending', NULL, ?, 'Pedido creado')`,
-        [createdOrderId, userId]
-      )
-
-      return createdOrderId
+    const result = await transaction(async (conn) => {
+      return createOrderCore(conn, {
+        items,
+        shippingCost,
+        channel: 'online',
+        paymentMethod: normalizedPaymentMethod,
+        status: 'pending',
+        paymentStatus: 'pending',
+        customerName,
+        customerEmail,
+        customerPhone,
+        address,
+        city,
+        province,
+        notes,
+        customerDocumentType,
+        customerDocumentNumber,
+        userId,
+        orderNumber,
+      })
     })
 
-    const order = await getOrderById(orderId, userId)
+    const order = await getOrderById(result.orderId, userId)
     res.status(201).json({ order })
   } catch (error) {
     console.error('Create order error:', error)
@@ -159,7 +209,7 @@ export async function createOrder(req, res) {
   }
 }
 
-async function getOrderById(orderId, userId = null) {
+export async function getOrderById(orderId, userId = null) {
   let sql = `
     SELECT o.*, u.first_name, u.last_name
     FROM orders o

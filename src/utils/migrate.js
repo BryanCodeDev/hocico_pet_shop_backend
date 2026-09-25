@@ -353,13 +353,21 @@ const migrations = [
   // ---- Parche de compatibilidad para bases que ya corrieron las
   // migraciones anteriores a esta (antes de POS). CREATE TABLE IF NOT
   // EXISTS no modifica tablas ya existentes, así que estos ALTER agregan
-  // lo nuevo (channel, cash_register_id, barcode, cash/card_pos) sin
-  // romper nada. Si la tabla ya tiene el cambio, el error es benigno y
+  // lo nuevo (channel, invoice_id, cash_register_id, barcode, cash/card_pos)
+  // sin romper nada. Si la tabla ya tiene el cambio, el error es benigno y
   // se salta (ver BENIGN_MIGRATION_CODES). ----
 
   `ALTER TABLE products ADD COLUMN barcode VARCHAR(50) NULL AFTER sku;`,
   `ALTER TABLE products ADD UNIQUE KEY uniq_barcode (barcode);`,
   `ALTER TABLE orders ADD COLUMN channel ENUM('online','pos') NOT NULL DEFAULT 'online' AFTER order_number;`,
+
+  // FIX: en bases creadas antes de que "orders" incluyera invoice_id,
+  // esta columna no existía. El ALTER de cash_register_id la necesitaba
+  // (AFTER invoice_id) y fallaba con ER_BAD_FIELD_ERROR, tumbando el server.
+  // Se agrega aquí, antes de cash_register_id, con su FK correspondiente.
+  `ALTER TABLE orders ADD COLUMN invoice_id INT NULL AFTER payment_id;`,
+  `ALTER TABLE orders ADD CONSTRAINT fk_orders_invoice FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL;`,
+
   `ALTER TABLE orders ADD COLUMN cash_register_id INT NULL AFTER invoice_id;`,
   `ALTER TABLE orders MODIFY COLUMN payment_method ENUM('wompi', 'whatsapp', 'bank_transfer', 'cash_on_delivery', 'cash', 'card_pos') NOT NULL;`,
   `ALTER TABLE orders ADD CONSTRAINT fk_orders_cash_register FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id) ON DELETE SET NULL;`,
@@ -438,7 +446,9 @@ export async function runMigrations() {
   console.log('🔄 Running migrations...')
   for (let i = 0; i < migrations.length; i++) {
     try {
-      await query(migrations[i])
+      await query(migrations[i], undefined, {
+        silentCodes: [...BENIGN_MIGRATION_CODES],
+      })
       console.log(`✅ Migration ${i + 1} completed`)
     } catch (error) {
       if (BENIGN_MIGRATION_CODES.has(error.code)) {
