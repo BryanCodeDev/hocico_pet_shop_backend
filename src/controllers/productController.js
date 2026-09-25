@@ -49,6 +49,11 @@ function buildProductQuery(filters = {}) {
   if (filters.active !== undefined) {
     whereConditions.push('p.is_active = ?')
     params.push(filters.active)
+  } else {
+    // Por defecto el catálogo solo enseña productos activos. El interruptor de
+    // "desactivar" del panel debe tener efecto en la tienda; sin esto, un
+    // producto retirado seguía apareciendo y podía comprarse online.
+    whereConditions.push('p.is_active = TRUE')
   }
 
   const whereClause = whereConditions.join(' AND ')

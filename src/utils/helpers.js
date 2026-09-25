@@ -1,5 +1,15 @@
 export function mapProduct(p) {
   if (!p) return null
+
+  // mysql2 devuelve DECIMAL como string. Comparar '9500.00' < '10000.00' sin
+  // Number() es una comparación LÉXICA ('9' > '1'), así que los productos
+  // rebajados cuyo precio actual tiene más dígitos que el original perdían el
+  // badge de descuento. La coerción va explícita para no depender de quién
+  //llame a la función.
+  const price = Number(p.price)
+  const originalPrice = Number(p.original_price)
+  const hasDiscount = Number.isFinite(originalPrice) && originalPrice > price
+
   return {
     ...p,
     id: p.id,
@@ -23,8 +33,8 @@ export function mapProduct(p) {
     isFeatured: p.is_featured,
     isNew: p.is_new,
     isOnSale: p.is_on_sale,
-    discount: p.original_price && p.price < p.original_price
-      ? Math.round(((p.original_price - p.price) / p.original_price) * 100)
+    discount: hasDiscount
+      ? Math.round(((originalPrice - price) / originalPrice) * 100)
       : 0,
     mainImage: p.main_image,
     images: p.images || [],

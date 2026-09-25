@@ -202,6 +202,17 @@ export async function webhook(req, res) {
       return res.status(200).json({ received: true })
     }
 
+    // La firma garantiza que el evento viene de la pasarela, NO que el importe
+    // notificado sea el del pedido. Sin esta comprobación, un pedido de
+    // $500.000 quedaría "pagado" y se facturaría tras un pago de $1.
+    const expectedAmountInCents = Math.round(Number(order.total || 0) * 100)
+    if (amountInCents > 0 && amountInCents !== expectedAmountInCents) {
+      console.error(
+        `Webhook con importe discrepante para ${order.order_number}: recibido ${amountInCents}, esperado ${expectedAmountInCents}`
+      )
+      return res.status(400).json({ error: 'El importe del pago no coincide con el total del pedido' })
+    }
+
     const prevPaymentStatus = order.payment_status
     const newPaymentStatus = mapWompiStatus(wompiStatus)
     const isApproval = wompiStatus === 'APPROVED'
@@ -242,6 +253,7 @@ export async function webhook(req, res) {
           payerId,
           order.order_number,
           JSON.stringify(body),
+          true,
         ]
       )
 

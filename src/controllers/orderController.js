@@ -33,6 +33,10 @@ export async function createOrderCore(conn, orderData) {
   let subtotal = 0
   let discount = 0
   const orderItems = []
+  // Las líneas se acumulan aquí y se insertan DESPUÉS de crear la cabecera:
+  // order_items.order_id tiene FK a orders(id), así que insertar con un
+  // order_id provisional (0) viola la restricción y revierte la transacción.
+  const orderItemRows = []
 
   for (const item of items) {
     const quantity = Number(item.quantity)
@@ -67,21 +71,16 @@ export async function createOrderCore(conn, orderData) {
     subtotal = Math.round((subtotal + itemSubtotal) * 100) / 100
     discount = Math.round((discount + lineDiscount * quantity) * 100) / 100
 
-    await conn.execute(
-      `INSERT INTO order_items (order_id, product_id, product_name, product_sku, product_slug, quantity, unit_price, discount_price, subtotal)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        0,
-        product.id,
-        product.name,
-        product.sku,
-        product.slug,
-        quantity,
-        unitPrice,
-        lineDiscount > 0 ? unitPrice : null,
-        itemSubtotal,
-      ]
-    )
+    orderItemRows.push([
+      product.id,
+      product.name,
+      product.sku,
+      product.slug,
+      quantity,
+      unitPrice,
+      lineDiscount > 0 ? unitPrice : null,
+      itemSubtotal,
+    ])
 
     await conn.execute('UPDATE products SET stock = stock - ? WHERE id = ?', [quantity, product.id])
 
@@ -125,14 +124,11 @@ export async function createOrderCore(conn, orderData) {
 
   const createdOrderId = orderResult.insertId
 
-  for (const item of items) {
+  for (const row of orderItemRows) {
     await conn.execute(
-      `UPDATE order_items SET order_id = ?
-       WHERE order_id = 0
-         AND product_id = ?
-         AND product_sku = ?
-       LIMIT 1`,
-      [createdOrderId, item.productId, item.sku]
+      `INSERT INTO order_items (order_id, product_id, product_name, product_sku, product_slug, quantity, unit_price, discount_price, subtotal)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [createdOrderId, ...row]
     )
   }
 
@@ -166,13 +162,18 @@ export async function createOrder(req, res) {
     const userId = req.user?.id || null
     const orderNumber = generateOrderNumber()
 
-    const [zoneRows] = await query(
+    // `query()` devuelve directamente el array de filas, no la tupla
+    // [rows, fields] de mysql2. Desestructurarlo con `const [zoneRows]` daba
+    // la primera fila (un objeto sin `.length`) o `undefined`, así que el
+    // envío salía siempre en 0 y las ciudades fuera de las zonas sembradas
+    // provocaban un TypeError y un 500.
+    const zoneRows = await query(
       `SELECT cost FROM shipping_zones
        WHERE LOWER(TRIM(city)) = LOWER(TRIM(?)) AND is_active = TRUE
        LIMIT 1`,
       [city]
     )
-    const shippingCost = zoneRows.length
+    const shippingCost = zoneRows && zoneRows.length
       ? Math.round(parseFloat(zoneRows[0].cost) * 100) / 100
       : 0
 
@@ -227,7 +228,12 @@ export async function getOrderById(orderId, userId = null) {
   if (!order) return null
 
   const items = await query(
-    `SELECT oi.*, p.slug, p.images FROM order_items oi
+    // `p.images` no existe: las imágenes viven en product_images. La imagen
+    // principal se resuelve con una subconsulta, igual que en getMyOrders y
+    // getOrderByNumber.
+    `SELECT oi.*, p.slug,
+            (SELECT url FROM product_images WHERE product_id = oi.product_id AND is_main = TRUE LIMIT 1) as main_image
+     FROM order_items oi
      LEFT JOIN products p ON oi.product_id = p.id
      WHERE oi.order_id = ?`,
     [orderId]

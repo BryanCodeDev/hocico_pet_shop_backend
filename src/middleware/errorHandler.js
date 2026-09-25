@@ -9,6 +9,17 @@ export function errorHandler(err, req, res, next) {
     return res.status(401).json({ error: 'No autorizado' })
   }
 
+  // Errores del parser del cuerpo: ya vienen con su código y su tipo. Sin esta
+  // rama, un JSON malformado (400) o un payload de más de 10 MB (413) se
+  // reportaban como 500 y ensuciaban el monitoreo con errores de servidor que
+  // en realidad son culpa del cliente.
+  if (err.type === 'entity.parse.failed' || err.status === 400) {
+    return res.status(400).json({ error: 'JSON inválido en el cuerpo de la petición' })
+  }
+  if (err.type === 'entity.too.large' || err.status === 413) {
+    return res.status(413).json({ error: 'El cuerpo de la petición excede el límite de 10 MB' })
+  }
+
   if (err.code === 'ER_DUP_ENTRY') {
     return res.status(409).json({ error: 'Registro duplicado' })
   }

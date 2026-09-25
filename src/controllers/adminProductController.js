@@ -8,8 +8,13 @@ function generateSlug(name) {
 }
 
 async function calculateDiscount(price, originalPrice) {
-  if (!originalPrice || originalPrice <= price) return 0
-  return Math.round(((originalPrice - price) / originalPrice) * 100)
+  // El formulario de administración manda los campos numéricos como string.
+  // Compararlos sin coerción hace la comparación léxica ('10000.00' <= '9500.00'
+  // es TRUE porque '1' < '9') y el descuento se guardaba en 0.
+  const current = Number(price)
+  const original = Number(originalPrice)
+  if (!original || !Number.isFinite(original) || original <= current) return 0
+  return Math.round(((original - current) / original) * 100)
 }
 
 export async function adminGetProducts(req, res) {
@@ -64,10 +69,16 @@ export async function adminGetProducts(req, res) {
 
     sql += ' ORDER BY p.created_at DESC'
 
-    const countSql = sql.replace(
-      'SELECT p.*, c.name as category_name, b.name as brand_name, (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image',
-      'SELECT COUNT(*) as total'
-    ).replace(/ORDER BY.*$/, '')
+    // El conteo se reconstruye a partir del tramo "FROM ... WHERE ..." de la
+    // consulta ya construida. Antes se intentaba sustituir la lista de
+    // columnas con un replace() sobre un literal de una sola línea que no
+    // coincidía con el SQL real (este está partido en varias líneas), así que
+    // el replace no hacía nada: la consulta de conteo devolvía filas de
+    // producto en vez de un total, `countResult.total` quedaba undefined y
+    // el listado reportaba siempre total: 0 y totalPages: 0. La paginación del
+    // panel de administración era inútil.
+    const fromIndex = sql.indexOf('FROM products p')
+    const countSql = 'SELECT COUNT(*) as total ' + sql.slice(fromIndex).replace(/ORDER BY[\s\S]*$/, '')
 
     const offset = (page - 1) * limit
     sql += ' LIMIT ? OFFSET ?'
@@ -125,9 +136,7 @@ export async function adminGetProductById(req, res) {
       product: {
         ...product,
         images: images.map(img => ({ id: img.id, url: img.url, alt: img.alt_text, isMain: img.is_main, sortOrder: img.sort_order })),
-        discount: product.original_price && product.price < product.original_price
-          ? Math.round(((product.original_price - product.price) / product.original_price) * 100)
-          : 0,
+        discount: await calculateDiscount(product.price, product.original_price),
       },
     })
   } catch (error) {
@@ -160,7 +169,7 @@ export async function adminCreateProduct(req, res) {
           specifications, features, warranty, price, original_price, cost_price, discount_percent,
           stock, min_stock, weight, dimensions, is_active, is_featured, is_new, is_on_sale,
           sale_starts_at, sale_ends_at, meta_title, meta_description
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           categoryId, brandId || null, name, finalSlug, sku,
           shortDescription || null, description || null,
@@ -188,6 +197,13 @@ export async function adminCreateProduct(req, res) {
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'SKU o slug ya existe' })
+    }
+    // Un categoryId o brandId que no existe llega válido a la validación de
+    // formato (solo comprueba que sea un entero positivo) y revienta la FK en
+    // la base de datos. Sin esta rama el cliente recibía un 500 por un dato
+    // inválido que él mismo envió.
+    if (error.code === 'ER_NO_REFERENCED_ROW_2' || error.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(400).json({ error: 'Categoría o marca no existen' })
     }
     console.error('Admin create product error:', error)
     res.status(500).json({ error: 'Error al crear producto' })
@@ -262,6 +278,9 @@ export async function adminUpdateProduct(req, res) {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'SKU o slug ya existe' })
     }
+    if (error.code === 'ER_NO_REFERENCED_ROW_2' || error.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(400).json({ error: 'Categoría o marca no existen' })
+    }
     console.error('Admin update product error:', error)
     res.status(500).json({ error: 'Error al actualizar producto' })
   }
@@ -301,13 +320,14 @@ export async function adminDuplicateProduct(req, res) {
           specifications, features, warranty, price, original_price, cost_price, discount_percent,
           stock, min_stock, weight, dimensions, is_active, is_featured, is_new, is_on_sale,
           sale_starts_at, sale_ends_at, meta_title, meta_description
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           original.category_id, original.brand_id,
           `${original.name} (Copia)`, newSlug, newSku,
           original.short_description, original.description,
           original.specifications ? JSON.stringify(original.specifications) : null,
           original.features ? JSON.stringify(original.features) : null,
+          original.warranty,
           original.price, original.original_price, original.cost_price, original.discount_percent,
           0, original.min_stock, original.weight, original.dimensions,
           false, false, false, false,

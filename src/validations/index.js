@@ -41,7 +41,7 @@ export const changePasswordValidation = [
 
 export const productValidation = [
   body('name').trim().notEmpty().withMessage('Nombre es requerido').isLength({ max: 255 }),
-  body('slug').trim().notEmpty().withMessage('Slug es requerido').isLength({ max: 280 }),
+  body('slug').optional().trim().notEmpty().withMessage('Slug es requerido').isLength({ max: 280 }),
   body('sku').trim().notEmpty().withMessage('SKU es requerido').isLength({ max: 100 }),
   body('categoryId').isInt({ min: 1 }).withMessage('Categoría inválida'),
   body('brandId').optional().isInt({ min: 1 }),

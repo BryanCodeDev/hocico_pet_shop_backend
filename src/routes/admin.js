@@ -6,7 +6,7 @@ import * as adminOrderController from '../controllers/orderController.js'
 import * as adminUserController from '../controllers/userController.js'
 import * as adminSettingsController from '../controllers/adminSettingsController.js'
 import { authenticate, authorize } from '../middleware/auth.js'
-import { idParamValidation, paginationValidation } from '../validations/index.js'
+import { idParamValidation, paginationValidation, productValidation, categoryValidation } from '../validations/index.js'
 import multer from 'multer'
 
 const upload = multer({ dest: 'uploads/', limits: { fileSize: 5 * 1024 * 1024 } })
@@ -23,8 +23,12 @@ router.get('/dashboard/low-stock', adminDashboardController.getLowStockProducts)
 
 router.get('/products', adminProductController.adminGetProducts)
 router.get('/products/:id', idParamValidation, adminProductController.adminGetProductById)
-router.post('/products', adminProductController.adminCreateProduct)
-router.put('/products/:id', idParamValidation, adminProductController.adminUpdateProduct)
+// Estas rutas son el gemelo de /api/products/admin/* y /api/categories/admin/*.
+// Aplican la MISMA validación que sus equivalentes; sin esto, el panel de
+// administración aceptaba precios negativos, stock negativo y categoryId
+// inexistente, y los errores de MySQL llegaban al cliente como 500.
+router.post('/products', productValidation, adminProductController.adminCreateProduct)
+router.put('/products/:id', idParamValidation, productValidation, adminProductController.adminUpdateProduct)
 router.delete('/products/:id', idParamValidation, adminProductController.adminDeleteProduct)
 router.post('/products/:id/duplicate', idParamValidation, adminProductController.adminDuplicateProduct)
 router.patch('/products/:id/featured', idParamValidation, adminProductController.adminToggleFeatured)
@@ -35,8 +39,8 @@ router.patch('/products/:id/images/reorder', idParamValidation, adminProductCont
 router.patch('/products/:id/images/:imageId/main', idParamValidation, adminProductController.adminSetMainImage)
 
 router.get('/categories', adminCategoryController.adminGetCategories)
-router.post('/categories', upload.single('image'), adminCategoryController.adminCreateCategory)
-router.put('/categories/:id', idParamValidation, upload.single('image'), adminCategoryController.adminUpdateCategory)
+router.post('/categories', upload.single('image'), categoryValidation, adminCategoryController.adminCreateCategory)
+router.put('/categories/:id', idParamValidation, upload.single('image'), categoryValidation, adminCategoryController.adminUpdateCategory)
 router.delete('/categories/:id', idParamValidation, adminCategoryController.adminDeleteCategory)
 router.patch('/categories/:id/status', idParamValidation, adminCategoryController.adminToggleStatus)
 

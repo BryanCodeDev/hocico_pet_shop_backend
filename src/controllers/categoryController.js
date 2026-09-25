@@ -38,6 +38,10 @@ export async function getCategories(req, res) {
     if (active !== undefined) {
       sql += ' AND c.is_active = ?'
       params.push(active)
+    } else {
+      // Igual que en productos: por defecto la tienda solo muestra categorías
+      // activas, para que el interruptor del panel tenga efecto real.
+      sql += ' AND c.is_active = TRUE'
     }
     if (parentId) {
       sql += ' AND c.parent_id = ?'
@@ -298,6 +302,26 @@ export async function adminUpdateCategory(req, res) {
     const { name, slug, description, imageUrl, parentId, seoTitle, seoDescription, isActive, sortOrder } = req.body
 
     const finalSlug = slug || generateSlug(name)
+
+    // Una categoría no puede ser su propia madre, ni quedar colgando de una de
+    // sus descendientes: ambos casos crean un ciclo que rompe la navegación por
+    // niveles y el filtro de subcategorías del catálogo.
+    if (parentId) {
+      if (Number(parentId) === Number(id)) {
+        return res.status(400).json({ error: 'Una categoría no puede ser su propia categoría padre' })
+      }
+      const descendants = await query(
+        `WITH RECURSIVE descendants AS (
+           SELECT id FROM categories WHERE parent_id = ?
+           UNION ALL
+           SELECT c.id FROM categories c JOIN descendants d ON c.parent_id = d.id
+         ) SELECT id FROM descendants`,
+        [id]
+      )
+      if (descendants.some((row) => Number(row.id) === Number(parentId))) {
+        return res.status(400).json({ error: 'La categoría padre es descendiente de esta categoría' })
+      }
+    }
 
     let image_url = imageUrl
     if (req.file) {
