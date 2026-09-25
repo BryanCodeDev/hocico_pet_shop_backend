@@ -15,15 +15,26 @@ const pool = mysql.createPool({
   charset: 'utf8mb4',
 })
 
+const DB_CONNECTION = () => ({
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 3306,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  charset: 'utf8mb4',
+})
+
+/**
+ * En local la base se crea si no existe. En Railway la base YA existe y el
+ * usuario de la aplicación no tiene permiso de CREATE DATABASE, así que el
+ * `CREATE` a ciega devolvía ER_DBACCESS_DENIED_ERROR y tumbaba el arranque
+ * aunque la conexión fuera correcta. Si falla por permisos, se sigue y se
+ * comprueba después que la base sea realmente alcanzable.
+ */
+const SIN_PERMISO_CREATE = ['ER_DBACCESS_DENIED_ERROR', 'ER_SPECIFIC_ACCESS_DENIED_ERROR']
+
 export async function ensureDatabase() {
   const dbName = process.env.DB_NAME || 'railway'
-  const conn = await mysql.createConnection({
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 3306,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    charset: 'utf8mb4',
-  })
+  const conn = await mysql.createConnection(DB_CONNECTION())
 
   try {
     await conn.query(
@@ -32,9 +43,17 @@ export async function ensureDatabase() {
        COLLATE utf8mb4_unicode_ci`
     )
     console.log(`✅ Database "${dbName}" is ready.`)
+  } catch (error) {
+    if (!SIN_PERMISO_CREATE.includes(error.code)) throw error
+    console.log(`ℹ️  Sin permiso de CREATE DATABASE; se asume que "${dbName}" ya existe.`)
   } finally {
     await conn.end()
   }
+
+  // Comprobación definitiva: si la base no existe o las credenciales están
+  // mal, falla aquí y el arranque se detiene con un error claro.
+  const check = await mysql.createConnection({ ...DB_CONNECTION(), database: dbName })
+  await check.end()
 }
 
 export async function connectDB() {
