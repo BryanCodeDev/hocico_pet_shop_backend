@@ -266,9 +266,17 @@ const migrations = [
     description VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  `CREATE TABLE IF NOT EXISTS shipping_zones (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    city VARCHAR(100) NOT NULL,
+    cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
-  `INSERT IGNORE INTO roles (id, name, description, permissions) VALUES
+   `INSERT IGNORE INTO roles (id, name, description, permissions) VALUES
   (1, 'admin', 'Administrador completo', '{"all": true}'),
   (2, 'user', 'Usuario registrado', '{"orders": ["read", "create"], "profile": ["read", "update"], "cart": ["read", "create", "update", "delete"]}'),
   (3, 'guest', 'Usuario invitado', '{"cart": ["read", "create", "update", "delete"]}');`,
@@ -297,9 +305,9 @@ const migrations = [
   (10, 'Anker', 'anker', TRUE);`,
 
   `INSERT IGNORE INTO settings (\`key\`, value, description) VALUES
-  ('site_name', '"TechStore"', 'Nombre del sitio'),
-  ('site_url', '"https://techstore.com"', 'URL del sitio'),
-  ('whatsapp_number', '"573209088777"', 'Número de WhatsApp para pedidos'),
+  ('site_name', '"Hocico Pet Shop"', 'Nombre del sitio'),
+  ('site_url', '"https://hocico.com.co"', 'URL del sitio'),
+  ('whatsapp_number', '"573133245600"', 'Número de WhatsApp para pedidos'),
   ('free_shipping_threshold', '100000', 'Monto mínimo para envío gratis'),
   ('default_currency', '"ARS"', 'Moneda por defecto'),
   ('tax_rate', '0.21', 'Tasa de impuesto (21% IVA)'),

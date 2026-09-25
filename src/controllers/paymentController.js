@@ -53,7 +53,7 @@ export async function createPreference(req, res) {
       auto_return: 'approved',
       external_reference: order.order_number,
       notification_url: `${process.env.BACKEND_URL}/api/payments/webhook`,
-      statement_descriptor: 'TechStore',
+      statement_descriptor: 'Hocico Pet Shop',
       expires: true,
       expiration_date_from: new Date().toISOString(),
       expiration_date_to: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),

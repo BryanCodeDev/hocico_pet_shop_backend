@@ -25,7 +25,7 @@ async function createAdmin() {
       await conn.execute(
         `INSERT INTO users (first_name, last_name, email, password_hash, role_id, is_active, email_verified)
          VALUES (?, ?, ?, ?, 1, TRUE, TRUE)`,
-        [firstName || 'Admin', lastName || 'TechStore', email, passwordHash]
+        [firstName || 'Admin', lastName || 'Hocico', email, passwordHash]
       )
     })
 

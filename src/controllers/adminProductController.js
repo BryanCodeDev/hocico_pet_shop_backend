@@ -386,7 +386,7 @@ export async function adminUploadImages(req, res) {
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       const uploadResult = await cloudinary.uploader.upload(file.path, {
-        folder: `techstore/products/${id}`,
+        folder: `hocico/products/${id}`,
         resource_type: 'image',
         transformation: [{ quality: 'auto', fetch_format: 'auto' }],
       })
@@ -418,7 +418,7 @@ export async function adminDeleteImage(req, res) {
 
     // Delete from Cloudinary
     const publicId = image.url.split('/').slice(-2).join('/').replace(/\.[^/.]+$/, '')
-    await cloudinary.uploader.destroy(`techstore/products/${id}/${publicId}`)
+    await cloudinary.uploader.destroy(`hocico/products/${id}/${publicId}`)
 
     await query('DELETE FROM product_images WHERE id = ?', [imageId])
 

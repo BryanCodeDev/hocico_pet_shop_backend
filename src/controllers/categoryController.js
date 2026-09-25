@@ -220,7 +220,7 @@ export async function adminCreateCategory(req, res) {
     let image_url = imageUrl
     if (req.file) {
       const uploadResult = await cloudinary.uploader.upload(req.file.path, {
-        folder: 'techstore/categories',
+        folder: 'hocico/categories',
         resource_type: 'image',
         transformation: [{ quality: 'auto', fetch_format: 'auto' }],
       })
@@ -262,7 +262,7 @@ export async function adminUpdateCategory(req, res) {
     let image_url = imageUrl
     if (req.file) {
       const uploadResult = await cloudinary.uploader.upload(req.file.path, {
-        folder: 'techstore/categories',
+        folder: 'hocico/categories',
         resource_type: 'image',
         transformation: [{ quality: 'auto', fetch_format: 'auto' }],
       })
