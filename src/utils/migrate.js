@@ -68,6 +68,7 @@ const migrations = [
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
+  // products ya incluye "barcode" para el lector de código de barras del POS
   `CREATE TABLE IF NOT EXISTS products (
     id INT AUTO_INCREMENT PRIMARY KEY,
     category_id INT NOT NULL,
@@ -75,6 +76,7 @@ const migrations = [
     name VARCHAR(255) NOT NULL,
     slug VARCHAR(280) NOT NULL UNIQUE,
     sku VARCHAR(100) NOT NULL UNIQUE,
+    barcode VARCHAR(50) NULL,
     short_description TEXT,
     description LONGTEXT,
     specifications JSON,
@@ -101,6 +103,7 @@ const migrations = [
     deleted_at TIMESTAMP NULL,
     FOREIGN KEY (category_id) REFERENCES categories(id),
     FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE SET NULL,
+    UNIQUE KEY uniq_barcode (barcode),
     INDEX idx_slug (slug),
     INDEX idx_sku (sku),
     INDEX idx_category (category_id),
@@ -143,6 +146,24 @@ const migrations = [
     UNIQUE KEY unique_session_product (session_id, product_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
+  // cash_registers (control de caja para POS) — se crea antes que orders
+  // porque orders.cash_register_id la referencia
+  `CREATE TABLE IF NOT EXISTS cash_registers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    opening_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+    closing_amount DECIMAL(12,2) NULL,
+    expected_amount DECIMAL(12,2) NULL,
+    difference DECIMAL(12,2) NULL,
+    status ENUM('open','closed') NOT NULL DEFAULT 'open',
+    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    closed_at TIMESTAMP NULL,
+    notes TEXT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    INDEX idx_user (user_id),
+    INDEX idx_status (status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
   // invoices se crea SIN el FK a orders (se agrega después con ALTER,
   // porque orders.invoice_id también referencia a invoices → dependencia cruzada)
   `CREATE TABLE IF NOT EXISTS invoices (
@@ -163,13 +184,16 @@ const migrations = [
     INDEX idx_invoices_status (status)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
+  // orders ya incluye "channel" (online/pos) y "cash_register_id" para
+  // vincular una venta física con la sesión de caja que la generó
   `CREATE TABLE IF NOT EXISTS orders (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NULL,
     order_number VARCHAR(50) NOT NULL UNIQUE,
+    channel ENUM('online','pos') NOT NULL DEFAULT 'online',
     status ENUM('pending', 'paid', 'preparing', 'shipped', 'delivered', 'cancelled', 'refunded') DEFAULT 'pending',
     payment_status ENUM('pending', 'approved', 'rejected', 'cancelled', 'refunded', 'in_process', 'in_mediation', 'charged_back') DEFAULT 'pending',
-    payment_method ENUM('wompi', 'whatsapp', 'bank_transfer', 'cash_on_delivery') NOT NULL,
+    payment_method ENUM('wompi', 'whatsapp', 'bank_transfer', 'cash_on_delivery', 'cash', 'card_pos') NOT NULL,
     subtotal DECIMAL(12,2) NOT NULL,
     discount DECIMAL(12,2) DEFAULT 0,
     shipping_cost DECIMAL(12,2) DEFAULT 0,
@@ -186,6 +210,7 @@ const migrations = [
     notes TEXT,
     payment_id VARCHAR(100),
     invoice_id INT NULL,
+    cash_register_id INT NULL,
     external_reference VARCHAR(100),
     paid_at TIMESTAMP NULL,
     shipped_at TIMESTAMP NULL,
@@ -195,8 +220,10 @@ const migrations = [
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL,
+    FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id) ON DELETE SET NULL,
     INDEX idx_user (user_id),
     INDEX idx_order_number (order_number),
+    INDEX idx_channel (channel),
     INDEX idx_status (status),
     INDEX idx_payment_status (payment_status),
     INDEX idx_payment_id (payment_id),
@@ -323,6 +350,21 @@ const migrations = [
     INDEX idx_product (product_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
+  // ---- Parche de compatibilidad para bases que ya corrieron las
+  // migraciones anteriores a esta (antes de POS). CREATE TABLE IF NOT
+  // EXISTS no modifica tablas ya existentes, así que estos ALTER agregan
+  // lo nuevo (channel, cash_register_id, barcode, cash/card_pos) sin
+  // romper nada. Si la tabla ya tiene el cambio, el error es benigno y
+  // se salta (ver BENIGN_MIGRATION_CODES). ----
+
+  `ALTER TABLE products ADD COLUMN barcode VARCHAR(50) NULL AFTER sku;`,
+  `ALTER TABLE products ADD UNIQUE KEY uniq_barcode (barcode);`,
+  `ALTER TABLE orders ADD COLUMN channel ENUM('online','pos') NOT NULL DEFAULT 'online' AFTER order_number;`,
+  `ALTER TABLE orders ADD COLUMN cash_register_id INT NULL AFTER invoice_id;`,
+  `ALTER TABLE orders MODIFY COLUMN payment_method ENUM('wompi', 'whatsapp', 'bank_transfer', 'cash_on_delivery', 'cash', 'card_pos') NOT NULL;`,
+  `ALTER TABLE orders ADD CONSTRAINT fk_orders_cash_register FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id) ON DELETE SET NULL;`,
+  `ALTER TABLE orders ADD INDEX idx_channel (channel);`,
+
   // ---- Seed mínimo embebido en la migración (roles, categorías, marcas, settings) ----
   // El resto de productos/usuario admin se maneja desde seed.sql (runSeed) para
   // no mezclar datos de catálogo dentro de la migración de esquema.
@@ -330,7 +372,8 @@ const migrations = [
   `INSERT IGNORE INTO roles (id, name, description, permissions) VALUES
   (1, 'admin', 'Administrador completo', '{"all": true}'),
   (2, 'user', 'Usuario registrado', '{"orders": ["read", "create"], "profile": ["read", "update"], "cart": ["read", "create", "update", "delete"]}'),
-  (3, 'guest', 'Usuario invitado', '{"cart": ["read", "create", "update", "delete"]}');`,
+  (3, 'guest', 'Usuario invitado', '{"cart": ["read", "create", "update", "delete"]}'),
+  (4, 'cashier', 'Cajero de punto de venta', '{"pos": ["read", "create"], "cash_registers": ["read", "create", "update"]}');`,
 
   `INSERT IGNORE INTO categories (id, name, slug, description, parent_id, sort_order, is_active) VALUES
   (1, 'Alimentos', 'alimentos', 'Alimento seco y húmedo para perros y gatos', NULL, 1, TRUE),
@@ -362,6 +405,7 @@ const migrations = [
   ('wompi_env', '"sandbox"', 'Entorno de Wompi: sandbox o production'),
   ('wompi_enabled', 'true', 'Habilitar pagos con Wompi'),
   ('factus_email', 'null', 'Email de la cuenta Factus'),
+  ('pos_enabled', 'true', 'Habilitar módulo de punto de venta (tienda física)'),
   ('maintenance_mode', 'false', 'Modo mantenimiento');`,
 ]
 

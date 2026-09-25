@@ -8,10 +8,11 @@
 -- ------------------------------------------------------------
 -- ROLES
 -- ------------------------------------------------------------
-INSERT IGNORE INTO `roles` (`id`, `name`, `description`) VALUES
-(1, 'admin', 'Administrador de la tienda'),
-(2, 'user', 'Cliente registrado'),
-(3, 'guest', 'Cuenta invitada / soporte');
+INSERT IGNORE INTO `roles` (`id`, `name`, `description`, `permissions`) VALUES
+(1, 'admin', 'Administrador de la tienda', JSON_OBJECT('all', TRUE)),
+(2, 'user', 'Cliente registrado', JSON_OBJECT('orders', JSON_ARRAY('read', 'create'), 'profile', JSON_ARRAY('read', 'update'), 'cart', JSON_ARRAY('read', 'create', 'update', 'delete'))),
+(3, 'guest', 'Cuenta invitada / soporte', JSON_OBJECT('cart', JSON_ARRAY('read', 'create', 'update', 'delete'))),
+(4, 'cashier', 'Cajero de punto de venta', JSON_OBJECT('pos', JSON_ARRAY('read', 'create'), 'cash_registers', JSON_ARRAY('read', 'create', 'update')));
 
 -- ------------------------------------------------------------
 -- USUARIO ADMIN

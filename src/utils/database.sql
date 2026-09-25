@@ -1,7 +1,7 @@
 -- ============================================================
 -- HOCICO PET SHOP — Esquema de Base de Datos (actualizado)
 -- Incluye: Wompi (pagos COP), Factus (facturación electrónica),
---          inventario (kardex) y zonas de envío
+--          inventario (kardex), zonas de envío y punto de venta (POS)
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS `railway`
@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS `products` (
   `name` VARCHAR(255) NOT NULL,
   `slug` VARCHAR(280) NOT NULL UNIQUE,
   `sku` VARCHAR(100) NOT NULL UNIQUE,
+  `barcode` VARCHAR(50) NULL,
   `short_description` TEXT,
   `description` LONGTEXT,
   `specifications` JSON,
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS `products` (
   `deleted_at` TIMESTAMP NULL,
   CONSTRAINT `fk_products_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE RESTRICT,
   CONSTRAINT `fk_products_brand` FOREIGN KEY (`brand_id`) REFERENCES `brands` (`id`) ON DELETE SET NULL,
+  UNIQUE KEY `uniq_products_barcode` (`barcode`),
   INDEX `idx_products_slug` (`slug`),
   INDEX `idx_products_sku` (`sku`),
   INDEX `idx_products_category` (`category_id`),
@@ -194,15 +196,35 @@ CREATE TABLE IF NOT EXISTS `invoices` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
--- ORDERS — con datos de facturación (CC/NIT) y pago Wompi/COP
+-- CASH REGISTERS (control de caja para POS)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `cash_registers` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `user_id` INT NOT NULL,
+  `opening_amount` DECIMAL(12,2) NOT NULL DEFAULT 0,
+  `closing_amount` DECIMAL(12,2) NULL,
+  `expected_amount` DECIMAL(12,2) NULL,
+  `difference` DECIMAL(12,2) NULL,
+  `status` ENUM('open','closed') NOT NULL DEFAULT 'open',
+  `opened_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `closed_at` TIMESTAMP NULL,
+  `notes` TEXT NULL,
+  CONSTRAINT `fk_cash_registers_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),
+  INDEX `idx_cash_registers_user` (`user_id`),
+  INDEX `idx_cash_registers_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- ORDERS — con datos de facturación (CC/NIT) y pago Wompi/COP/POS
 -- ============================================================
 CREATE TABLE IF NOT EXISTS `orders` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `user_id` INT NULL,
   `order_number` VARCHAR(50) NOT NULL UNIQUE,
+  `channel` ENUM('online','pos') NOT NULL DEFAULT 'online',
   `status` ENUM('pending', 'paid', 'preparing', 'shipped', 'delivered', 'cancelled', 'refunded') DEFAULT 'pending',
   `payment_status` ENUM('pending', 'approved', 'rejected', 'cancelled', 'refunded', 'in_process', 'in_mediation', 'charged_back') DEFAULT 'pending',
-  `payment_method` ENUM('wompi', 'whatsapp', 'bank_transfer', 'cash_on_delivery') NOT NULL,
+  `payment_method` ENUM('wompi', 'whatsapp', 'bank_transfer', 'cash_on_delivery', 'cash', 'card_pos') NOT NULL,
   `subtotal` DECIMAL(12,2) NOT NULL,
   `discount` DECIMAL(12,2) DEFAULT 0,
   `shipping_cost` DECIMAL(12,2) DEFAULT 0,
@@ -219,6 +241,7 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `notes` TEXT,
   `payment_id` VARCHAR(100),
   `invoice_id` INT NULL,
+  `cash_register_id` INT NULL,
   `external_reference` VARCHAR(100),
   `paid_at` TIMESTAMP NULL,
   `shipped_at` TIMESTAMP NULL,
@@ -228,8 +251,10 @@ CREATE TABLE IF NOT EXISTS `orders` (
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `fk_orders_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_orders_invoice` FOREIGN KEY (`invoice_id`) REFERENCES `invoices` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_orders_cash_register` FOREIGN KEY (`cash_register_id`) REFERENCES `cash_registers` (`id`) ON DELETE SET NULL,
   INDEX `idx_orders_user` (`user_id`),
   INDEX `idx_orders_number` (`order_number`),
+  INDEX `idx_orders_channel` (`channel`),
   INDEX `idx_orders_status` (`status`),
   INDEX `idx_orders_payment_status` (`payment_status`),
   INDEX `idx_orders_payment_id` (`payment_id`),
@@ -348,10 +373,19 @@ CREATE TABLE IF NOT EXISTS `settings` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO `settings` (`key`, `value`, `description`) VALUES
+  ('site_name', '"Hocico Pet Shop"', 'Nombre del sitio'),
+  ('site_url', '"https://hocico.com.co"', 'URL del sitio'),
+  ('whatsapp_number', '"573133245600"', 'Número de WhatsApp para pedidos'),
+  ('free_shipping_threshold', '100000', 'Monto mínimo para envío gratis'),
+  ('default_currency', '"COP"', 'Moneda por defecto'),
+  ('site_currency', '"COP"', 'Moneda del sitio (alias de default_currency)'),
+  ('tax_rate', '0.19', 'Tasa de IVA en Colombia (19%)'),
   ('wompi_public_key', 'null', 'Llave pública de Wompi (sandbox/producción)'),
   ('wompi_env', '"sandbox"', 'Entorno de Wompi: sandbox o production'),
+  ('wompi_enabled', 'true', 'Habilitar pagos con Wompi'),
   ('factus_email', 'null', 'Email de la cuenta Factus'),
-  ('site_currency', '"COP"', 'Moneda del sitio')
+  ('pos_enabled', 'true', 'Habilitar módulo de punto de venta (tienda física)'),
+  ('maintenance_mode', 'false', 'Modo mantenimiento')
 ON DUPLICATE KEY UPDATE `updated_at` = CURRENT_TIMESTAMP;
 
 -- ============================================================
