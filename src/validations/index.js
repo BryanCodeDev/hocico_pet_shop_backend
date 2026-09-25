@@ -148,7 +148,7 @@ export const posSaleValidation = [
   body('items').isArray({ min: 1 }).withMessage('El pedido debe tener al menos un producto'),
   body('items.*.productId').isInt({ min: 1 }).withMessage('Producto inválido'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Cantidad inválida'),
-  body('paymentMethod').isIn(['cash', 'card_pos']).withMessage('Método de pago inválido para POS'),
+   body('paymentMethod').isIn(['cash', 'wompi']).withMessage('Método de pago inválido para POS'),
   body('cashReceived').optional().isFloat({ min: 0 }).withMessage('Monto recibido inválido'),
   body('customerDocumentType').optional().isIn(['CC', 'NIT', 'CE', 'PASSPORT']).withMessage('Tipo de documento inválido'),
   body('customerDocumentNumber').optional().trim().isLength({ max: 20 }).withMessage('Número de documento inválido'),

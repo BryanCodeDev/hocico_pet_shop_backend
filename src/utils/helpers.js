@@ -31,6 +31,28 @@ export function mapProduct(p) {
   }
 }
 
+export function mapCategory(c) {
+  if (!c) return null
+  return {
+    ...c,
+    id: c.id,
+    name: c.name,
+    slug: c.slug,
+    description: c.description,
+    imageUrl: c.image_url,
+    parentId: c.parent_id,
+    seoTitle: c.seo_title,
+    seoDescription: c.seo_description,
+    isActive: Boolean(c.is_active),
+    sortOrder: c.sort_order,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+    productCount: c.product_count ?? 0,
+    subcategories: (c.subcategories || []).map(s => mapCategory(s)),
+    products: c.products,
+  }
+}
+
 export function formatPrice(price, currency = 'COP', locale = 'es-CO') {
   if (price === null || price === undefined) return '$0'
   return new Intl.NumberFormat(locale, {

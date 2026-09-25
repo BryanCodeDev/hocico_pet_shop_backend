@@ -12,8 +12,11 @@ function buildProductQuery(filters = {}) {
   const params = []
 
   if (filters.category) {
-    whereConditions.push('c.slug = ?')
-    params.push(filters.category)
+    // Incluye las subcategorías: el catálogo de Hocico cuelga de
+    // Alimentos > Alimento para Perro/Gato, así que filtrar por la raíz
+    // ("alimentos") debe traer también los productos de sus hijas.
+    whereConditions.push('(c.slug = ? OR c.parent_id = (SELECT c2.id FROM categories c2 WHERE c2.slug = ? AND c2.deleted_at IS NULL LIMIT 1))')
+    params.push(filters.category, filters.category)
   }
   if (filters.brand) {
     whereConditions.push('b.slug = ?')

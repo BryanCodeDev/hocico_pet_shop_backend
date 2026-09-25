@@ -415,6 +415,68 @@ const migrations = [
   ('factus_email', 'null', 'Email de la cuenta Factus'),
   ('pos_enabled', 'true', 'Habilitar módulo de punto de venta (tienda física)'),
   ('maintenance_mode', 'false', 'Modo mantenimiento');`,
+
+  // ---- Corrección del catálogo de categorías ----
+  // La base de producción venía heredada de la plantilla de tienda de
+  // tecnología ("techstore"), por lo que el `INSERT IGNORE` de arriba no
+  // surtió efecto: los ids 1..9 ya existían con nombres como Audio,
+  // Smartphones, Gaming, etc. Estas sentencias son idempotentes y dejan el
+  // catálogo real de Hocico como fuente de verdad.
+
+  // 1) Categorías raíz: insertan si el slug no existe y, si ya existe
+  //    (caso de la base heredada), la re-normalizan al dato de Hocico.
+  `INSERT INTO categories (name, slug, description, is_active, sort_order) VALUES
+  ('Alimentos', 'alimentos', 'Alimento seco y húmedo para perros y gatos', TRUE, 1),
+  ('Snacks', 'snacks', 'Premios, huesos y galletas para consentir a tu mascota', TRUE, 2),
+  ('Accesorios', 'accesorios', 'Correas, camas, comederos, transportadoras y más', TRUE, 3),
+  ('Higiene y Cuidado', 'higiene-cuidado', 'Shampoos, cepillos y productos de aseo', TRUE, 4)
+  ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    description = VALUES(description),
+    image_url = NULL,
+    is_active = TRUE,
+    deleted_at = NULL,
+    sort_order = VALUES(sort_order);`,
+
+  // 2) Subcategorías de Alimentos (el padre se resuelve por slug porque el
+  //    id depende del AUTO_INCREMENT de cada base).
+  `INSERT INTO categories (name, slug, description, is_active, sort_order) VALUES
+  ('Alimento para Perro', 'alimento-perro', 'Concentrados y alimento húmedo para perros de todas las edades', TRUE, 1),
+  ('Alimento para Gato', 'alimento-gato', 'Concentrados y alimento húmedo para gatos de todas las edades', TRUE, 2)
+  ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    description = VALUES(description),
+    image_url = NULL,
+    is_active = TRUE,
+    deleted_at = NULL,
+    sort_order = VALUES(sort_order);`,
+
+  // El subquery va envuelto en una tabla derivada porque MySQL no permite
+  // leer `categories` desde el subquery de un UPDATE sobre `categories`
+  // (ER_UPDATE_TABLE_USED / error 1093).
+  `UPDATE categories SET
+    parent_id = (SELECT a.id FROM (SELECT id FROM categories WHERE slug = 'alimentos' LIMIT 1) AS a)
+   WHERE slug IN ('alimento-perro', 'alimento-gato')
+     AND deleted_at IS NULL;`,
+
+  // 3) Los productos que colgaban de categorías de tecnología se reasignan a
+  //    "Accesorios" para no dejarlos huérfanos (products.category_id es NOT
+  //    NULL y la API pública filtra por deleted_at IS NULL).
+  `UPDATE products SET
+    category_id = (SELECT a.id FROM (SELECT id FROM categories WHERE slug = 'accesorios' AND deleted_at IS NULL LIMIT 1) AS a)
+   WHERE deleted_at IS NULL
+     AND category_id IN (
+       SELECT l.id FROM (SELECT id FROM categories
+        WHERE slug IN ('audio','smartphones','computadores','gaming','smartwatch','cargadores','perifericos','gadgets')) AS l
+     )
+     AND EXISTS (SELECT 1 FROM categories a WHERE a.slug = 'accesorios' AND a.deleted_at IS NULL);`,
+
+  // 4) Baja lógica de las categorías heredadas de la plantilla de tecnología.
+  `UPDATE categories SET
+    is_active = FALSE,
+    deleted_at = CURRENT_TIMESTAMP
+   WHERE deleted_at IS NULL
+     AND slug IN ('audio','smartphones','computadores','gaming','smartwatch','cargadores','perifericos','gadgets');`,
 ]
 
 function splitSqlStatements(sql) {

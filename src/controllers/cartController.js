@@ -118,6 +118,10 @@ export async function updateCartItem(req, res) {
     const { quantity } = req.body
     const qty = parseInt(quantity)
 
+    if (!Number.isFinite(qty)) {
+      return res.status(400).json({ error: 'Cantidad inválida' })
+    }
+
     if (qty < 1) {
       return removeFromCart(req, res)
     }

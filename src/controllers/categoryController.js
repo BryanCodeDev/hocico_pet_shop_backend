@@ -2,10 +2,24 @@ import { query, queryOne, transaction } from '../config/database.js'
 import slugify from 'slugify'
 import { validationResult } from 'express-validator'
 import cloudinary from '../config/cloudinary.js'
+import { mapCategory } from '../utils/helpers.js'
 
 function generateSlug(name) {
   return slugify(name, { lower: true, strict: true })
 }
+
+// Cuenta los productos de la categoría y los de sus subcategorías directas,
+// para que una categoría raíz (p. ej. "Alimentos") no aparezca con 0 productos
+// cuando su catálogo real cuelga de "Alimento para Perro/Gato".
+const PRODUCT_COUNT_SQL = `
+  (SELECT COUNT(*)
+     FROM products p
+     JOIN categories pc ON pc.id = p.category_id
+    WHERE p.is_active = TRUE
+      AND p.deleted_at IS NULL
+      AND pc.deleted_at IS NULL
+      AND (pc.id = c.id OR pc.parent_id = c.id)) as product_count
+`
 
 export async function getCategories(req, res) {
   try {
@@ -14,8 +28,8 @@ export async function getCategories(req, res) {
     const withProducts = req.query.withProducts === 'true'
 
     let sql = `
-      SELECT c.*, 
-             (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.is_active = TRUE AND p.deleted_at IS NULL) as product_count
+      SELECT c.*,
+             ${PRODUCT_COUNT_SQL}
       FROM categories c
       WHERE c.deleted_at IS NULL
     `
@@ -41,15 +55,19 @@ export async function getCategories(req, res) {
         cat.products = await query(
           `SELECT p.*, (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image
            FROM products p
-           WHERE p.category_id = ? AND p.is_active = TRUE AND p.deleted_at IS NULL
+           WHERE p.is_active = TRUE AND p.deleted_at IS NULL
+             AND p.category_id IN (
+               SELECT cc.id FROM categories cc
+                WHERE cc.deleted_at IS NULL AND (cc.id = ? OR cc.parent_id = ?)
+             )
            ORDER BY p.is_featured DESC, p.created_at DESC
            LIMIT 8`,
-          [cat.id]
+          [cat.id, cat.id]
         )
       }
     }
 
-    res.json({ categories })
+    res.json({ categories: categories.map(mapCategory) })
   } catch (error) {
     console.error('Get categories error:', error)
     res.status(500).json({ error: 'Error al obtener categorías' })
@@ -61,8 +79,8 @@ export async function getCategoryBySlug(req, res) {
     const { slug } = req.params
 
     const category = await queryOne(
-      `SELECT c.*, 
-              (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.is_active = TRUE AND p.deleted_at IS NULL) as product_count
+      `SELECT c.*,
+              ${PRODUCT_COUNT_SQL}
        FROM categories c
        WHERE c.slug = ? AND c.deleted_at IS NULL`,
       [slug]
@@ -80,12 +98,20 @@ export async function getCategoryBySlug(req, res) {
     const products = await query(
       `SELECT p.*, (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image
        FROM products p
-       WHERE p.category_id = ? AND p.is_active = TRUE AND p.deleted_at IS NULL
+       WHERE p.is_active = TRUE AND p.deleted_at IS NULL
+         AND p.category_id IN (
+           SELECT cc.id FROM categories cc
+            WHERE cc.deleted_at IS NULL AND (cc.id = ? OR cc.parent_id = ?)
+         )
        ORDER BY p.is_featured DESC, p.created_at DESC`,
-      [category.id]
+      [category.id, category.id]
     )
 
-    res.json({ category, subcategories, products })
+    res.json({
+      category: mapCategory(category),
+      subcategories: subcategories.map(mapCategory),
+      products,
+    })
   } catch (error) {
     console.error('Get category error:', error)
     res.status(500).json({ error: 'Error al obtener categoría' })
@@ -109,31 +135,31 @@ export async function getCategoryProducts(req, res) {
       return res.status(404).json({ error: 'Categoría no encontrada' })
     }
 
-    let sql = `
-      SELECT p.*, c.slug as category_slug,
-             (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.category_id = ? AND p.is_active = TRUE AND p.deleted_at IS NULL
-    `
-    const params = [category.id]
+    // El alcance incluye la categoría y sus subcategorías directas, para que
+    // "/categoria/alimentos" muestre también lo de Perro y Gato.
+    const whereConditions = [
+      'p.is_active = TRUE',
+      'p.deleted_at IS NULL',
+      'p.category_id IN (SELECT cc.id FROM categories cc WHERE cc.deleted_at IS NULL AND (cc.id = ? OR cc.parent_id = ?))',
+    ]
+    const params = [category.id, category.id]
 
     if (minPrice !== undefined) {
-      sql += ' AND p.price >= ?'
+      whereConditions.push('p.price >= ?')
       params.push(minPrice)
     }
     if (maxPrice !== undefined) {
-      sql += ' AND p.price <= ?'
+      whereConditions.push('p.price <= ?')
       params.push(maxPrice)
     }
     if (onSale) {
-      sql += ' AND p.is_on_sale = TRUE AND (p.sale_ends_at IS NULL OR p.sale_ends_at > NOW())'
+      whereConditions.push('p.is_on_sale = TRUE AND (p.sale_ends_at IS NULL OR p.sale_ends_at > NOW())')
     }
     if (inStock) {
-      sql += ' AND p.stock > 0'
+      whereConditions.push('p.stock > 0')
     }
     if (brand) {
-      sql += ' AND p.brand_id = (SELECT id FROM brands WHERE slug = ?)'
+      whereConditions.push('p.brand_id = (SELECT id FROM brands WHERE slug = ?)')
       params.push(brand)
     }
 
@@ -145,20 +171,34 @@ export async function getCategoryProducts(req, res) {
       'name-asc': 'p.name ASC',
       'name-desc': 'p.name DESC',
     }
-    sql += ` ORDER BY ${sortMap[sort] || 'p.created_at DESC'}`
+    const orderBy = sortMap[sort] || 'p.created_at DESC'
+    const whereClause = whereConditions.join(' AND ')
 
-    const countSql = sql.replace(
-      'SELECT p.*, c.slug as category_slug, (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image',
-      'SELECT COUNT(*) as total'
-    ).replace(/ORDER BY.*$/, '')
+    const fromSql = `
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE ${whereClause}
+    `
+
+    // El count se construye aparte (no con .replace() sobre el SQL de
+    // productos): el replace anterior no coincidía por los saltos de línea del
+    // template y devolvía la primera fila del producto en vez del conteo,
+    // dejando pagination.total siempre en 0.
+    const countSql = `SELECT COUNT(*) as total ${fromSql}`
+    const listSql = `
+      SELECT p.*, c.slug as category_slug,
+             (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image
+      ${fromSql}
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `
 
     const offset = (page - 1) * limit
-    sql += ' LIMIT ? OFFSET ?'
-    params.push(limit, offset)
+    const listParams = [...params, limit, offset]
 
     const [products, countResult] = await Promise.all([
-      query(sql, params),
-      queryOne(countSql, params.slice(0, -2)),
+      query(listSql, listParams),
+      queryOne(countSql, params),
     ])
 
     const total = countResult?.total || 0
@@ -199,7 +239,7 @@ export async function adminGetCategories(req, res) {
        ORDER BY c.sort_order, c.name`
     )
 
-    res.json({ categories })
+    res.json({ categories: categories.map(mapCategory) })
   } catch (error) {
     console.error('Admin get categories error:', error)
     res.status(500).json({ error: 'Error al obtener categorías' })
@@ -237,7 +277,7 @@ export async function adminCreateCategory(req, res) {
     })
 
     const category = await queryOne('SELECT * FROM categories WHERE id = ?', [result])
-    res.status(201).json({ category })
+    res.status(201).json({ category: mapCategory(category) })
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'Nombre o slug ya existe' })
@@ -285,7 +325,7 @@ export async function adminUpdateCategory(req, res) {
       return res.status(404).json({ error: 'Categoría no encontrada' })
     }
 
-    res.json({ category })
+    res.json({ category: mapCategory(category) })
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'Nombre o slug ya existe' })

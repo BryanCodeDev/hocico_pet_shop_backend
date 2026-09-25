@@ -1,8 +1,15 @@
+import crypto from 'crypto'
 import { query, queryOne, transaction } from '../config/database.js'
 import { validationResult } from 'express-validator'
 import { generateOrderNumber, mapProduct } from '../utils/helpers.js'
 import { createOrderCore, getOrderById } from './orderController.js'
 import { triggerInvoiceGeneration } from './invoiceController.js'
+import { getWompiConfig } from './paymentController.js'
+
+function generateIntegritySignature(reference, amountInCents, currency) {
+  const data = `${reference}${amountInCents}${currency}${process.env.WOMPI_INTEGRITY_SECRET}`
+  return crypto.createHash('sha256').update(data).digest('hex')
+}
 
 function parseCashReceivedNotes(notes) {
   if (!notes) return null
@@ -229,16 +236,18 @@ export async function createPosSale(req, res) {
       notesValue = notes
     }
 
+    const isWompi = paymentMethod === 'wompi'
+
     const result = await transaction(async (conn) => {
       return createOrderCore(conn, {
         items,
         shippingCost: 0,
         channel: 'pos',
         paymentMethod,
-        status: 'paid',
-        paymentStatus: 'approved',
+        status: isWompi ? 'pending' : 'paid',
+        paymentStatus: isWompi ? 'pending' : 'approved',
         cashRegisterId: openRegister.id,
-        paidAt: new Date(),
+        paidAt: isWompi ? null : new Date(),
         customerName: customerName || 'Consumidor Final',
         customerEmail: customerEmail || '',
         customerPhone: customerPhone || req.user.phone || '',
@@ -253,11 +262,48 @@ export async function createPosSale(req, res) {
       })
     })
 
+    const order = await getOrderById(result.orderId, userId)
+
+    if (isWompi) {
+      const { publicKey, wompiEnv, currency } = await getWompiConfig({ currency: 'COP' })
+      if (!publicKey || !process.env.WOMPI_INTEGRITY_SECRET) {
+        return res.status(500).json({ error: 'Wompi no está configurado. Usa pago en efectivo.' })
+      }
+
+      const amountInCents = Math.round(Number(order.total || 0)) * 100
+      const reference = order.order_number
+      const integritySignature = generateIntegritySignature(reference, amountInCents, currency)
+
+      await query(
+        `INSERT INTO payments
+          (order_id, payment_id, reference, payment_method_id, payment_type, status, amount, currency, external_reference, signature_checked)
+         VALUES (?, ?, ?, 'wompi', 'wompi', 'pending', ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE status = 'pending', updated_at = CURRENT_TIMESTAMP`,
+        [order.id, reference, reference, order.total, currency, order.order_number]
+      )
+
+      const redirectUrl = `${process.env.FRONTEND_URL || ''}/admin/caja?paymentSuccess=${order.id}`
+
+      return res.status(201).json({
+        order,
+        wompi: {
+          publicKey,
+          currency,
+          amountInCents,
+          reference,
+          signature: integritySignature,
+          integritySignature,
+          environment: wompiEnv,
+          redirectUrl,
+          paymentMethod: 'wompi',
+        },
+      })
+    }
+
     triggerInvoiceGeneration(result.orderId).catch((err) => {
       console.error(`Error generando factura para venta POS ${result.orderId}:`, err)
     })
 
-    const order = await getOrderById(result.orderId, userId)
     res.status(201).json({ order })
   } catch (error) {
     console.error('Create POS sale error:', error)
@@ -346,7 +392,7 @@ export async function closeCashRegister(req, res) {
     const cardSales = await queryOne(
       `SELECT COALESCE(SUM(total), 0) as total
        FROM orders
-       WHERE cash_register_id = ? AND payment_method = 'card_pos' AND status = 'paid'`,
+       WHERE cash_register_id = ? AND payment_method = 'wompi' AND status = 'paid'`,
       [register.id]
     )
 
@@ -558,9 +604,9 @@ export async function getDailyReport(req, res) {
          COALESCE(SUM(total), 0) as total_sales,
          COUNT(*) as order_count,
          COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total ELSE 0 END), 0) as cash_sales,
-         COALESCE(SUM(CASE WHEN payment_method = 'card_pos' THEN total ELSE 0 END), 0) as card_sales,
+         COALESCE(SUM(CASE WHEN payment_method = 'wompi' THEN total ELSE 0 END), 0) as card_sales,
          COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN 1 ELSE 0 END), 0) as cash_count,
-         COALESCE(SUM(CASE WHEN payment_method = 'card_pos' THEN 1 ELSE 0 END), 0) as card_count
+         COALESCE(SUM(CASE WHEN payment_method = 'wompi' THEN 1 ELSE 0 END), 0) as card_count
        FROM orders
        WHERE DATE(created_at) = DATE(?)
          AND user_id = ?
@@ -585,6 +631,7 @@ export async function getDailyReport(req, res) {
       byPaymentMethod: {
         cash: { total: parseFloat(summary.cash_sales || 0), count: summary.cash_count || 0 },
         card_pos: { total: parseFloat(summary.card_sales || 0), count: summary.card_count || 0 },
+        wompi: { total: parseFloat(summary.card_sales || 0), count: summary.card_count || 0 },
       },
       currentRegister: openRegister
         ? { openingAmount: parseFloat(openRegister.opening_amount || 0) }
@@ -609,7 +656,6 @@ export async function getAdminDailyReport(req, res) {
          COALESCE(SUM(CASE WHEN channel = 'pos' THEN 1 ELSE 0 END), 0) as pos_count,
          COALESCE(SUM(CASE WHEN channel = 'online' THEN 1 ELSE 0 END), 0) as online_count,
          COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN total ELSE 0 END), 0) as cash_sales,
-         COALESCE(SUM(CASE WHEN payment_method = 'card_pos' THEN total ELSE 0 END), 0) as card_pos_sales,
          COALESCE(SUM(CASE WHEN payment_method = 'wompi' THEN total ELSE 0 END), 0) as wompi_sales,
          COALESCE(SUM(CASE WHEN payment_method = 'bank_transfer' THEN total ELSE 0 END), 0) as transfer_sales
        FROM orders
@@ -632,7 +678,7 @@ export async function getAdminDailyReport(req, res) {
       },
       byPaymentMethod: {
         cash: parseFloat(summary.cash_sales || 0),
-        card_pos: parseFloat(summary.card_pos_sales || 0),
+        card_pos: 0,
         wompi: parseFloat(summary.wompi_sales || 0),
         bank_transfer: parseFloat(summary.transfer_sales || 0),
       },
