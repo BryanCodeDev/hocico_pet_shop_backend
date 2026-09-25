@@ -8,53 +8,63 @@ function generateSlug(name) {
 }
 
 function buildProductQuery(filters = {}) {
-  let sql = `
+  const whereConditions = ['p.deleted_at IS NULL']
+  const params = []
+
+  if (filters.category) {
+    whereConditions.push('c.slug = ?')
+    params.push(filters.category)
+  }
+  if (filters.brand) {
+    whereConditions.push('b.slug = ?')
+    params.push(filters.brand)
+  }
+  if (filters.search) {
+    whereConditions.push('MATCH(p.name, p.short_description, p.description) AGAINST(? IN BOOLEAN MODE)')
+    params.push(filters.search + '*')
+  }
+  if (filters.minPrice !== undefined) {
+    whereConditions.push('p.price >= ?')
+    params.push(filters.minPrice)
+  }
+  if (filters.maxPrice !== undefined) {
+    whereConditions.push('p.price <= ?')
+    params.push(filters.maxPrice)
+  }
+  if (filters.onSale) {
+    whereConditions.push('p.is_on_sale = TRUE AND (p.sale_ends_at IS NULL OR p.sale_ends_at > NOW())')
+  }
+  if (filters.inStock) {
+    whereConditions.push('p.stock > 0')
+  }
+  if (filters.featured) {
+    whereConditions.push('p.is_featured = TRUE')
+  }
+  if (filters.isNew) {
+    whereConditions.push('p.is_new = TRUE')
+  }
+  if (filters.active !== undefined) {
+    whereConditions.push('p.is_active = ?')
+    params.push(filters.active)
+  }
+
+  const whereClause = whereConditions.join(' AND ')
+  const selectSql = `
     SELECT p.*, c.name as category_name, c.slug as category_slug,
            b.name as brand_name, b.slug as brand_slug,
            (SELECT url FROM product_images WHERE product_id = p.id AND is_main = TRUE LIMIT 1) as main_image
     FROM products p
     LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN brands b ON p.brand_id = b.id
-    WHERE p.deleted_at IS NULL
+    WHERE ${whereClause}
   `
-  const params = []
-
-  if (filters.category) {
-    sql += ' AND c.slug = ?'
-    params.push(filters.category)
-  }
-  if (filters.brand) {
-    sql += ' AND b.slug = ?'
-    params.push(filters.brand)
-  }
-  if (filters.search) {
-    sql += ' AND MATCH(p.name, p.short_description, p.description) AGAINST(? IN BOOLEAN MODE)'
-    params.push(filters.search + '*')
-  }
-  if (filters.minPrice !== undefined) {
-    sql += ' AND p.price >= ?'
-    params.push(filters.minPrice)
-  }
-  if (filters.maxPrice !== undefined) {
-    sql += ' AND p.price <= ?'
-    params.push(filters.maxPrice)
-  }
-  if (filters.onSale) {
-    sql += ' AND p.is_on_sale = TRUE AND (p.sale_ends_at IS NULL OR p.sale_ends_at > NOW())'
-  }
-  if (filters.inStock) {
-    sql += ' AND p.stock > 0'
-  }
-  if (filters.featured) {
-    sql += ' AND p.is_featured = TRUE'
-  }
-  if (filters.isNew) {
-    sql += ' AND p.is_new = TRUE'
-  }
-  if (filters.active !== undefined) {
-    sql += ' AND p.is_active = ?'
-    params.push(filters.active)
-  }
+  const countSql = `
+    SELECT COUNT(*) as total
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    LEFT JOIN brands b ON p.brand_id = b.id
+    WHERE ${whereClause}
+  `
 
   const sortMap = {
     'newest': 'p.created_at DESC',
@@ -64,14 +74,12 @@ function buildProductQuery(filters = {}) {
     'name-asc': 'p.name ASC',
     'name-desc': 'p.name DESC',
   }
-  sql += ` ORDER BY ${sortMap[filters.sort] || 'p.created_at DESC'}`
-
   const limit = Math.min(filters.limit || 12, 100)
   const offset = ((filters.page || 1) - 1) * limit
-  sql += ` LIMIT ? OFFSET ?`
+  const sql = `${selectSql} ORDER BY ${sortMap[filters.sort] || 'p.created_at DESC'} LIMIT ? OFFSET ?`
   params.push(limit, offset)
 
-  return { sql, params, limit, offset }
+  return { sql, params, countSql, countParams: [...params.slice(0, -2)], limit }
 }
 
 export async function getProducts(req, res) {
@@ -92,16 +100,11 @@ export async function getProducts(req, res) {
       limit: req.query.limit ? parseInt(req.query.limit) : 12,
     }
 
-    const { sql, params, limit, offset } = buildProductQuery(filters)
-
-    const whereMatch = sql.match(/WHERE[\s\S]*?(?=ORDER BY|LIMIT|$)/)
-    const whereClause = whereMatch ? `WHERE ${whereMatch[0].replace(/^WHERE\s*/, '').trim()}` : 'WHERE p.deleted_at IS NULL'
-    const countSql = `SELECT COUNT(*) as total FROM products p LEFT JOIN categories c ON p.category_id = c.id LEFT JOIN brands b ON p.brand_id = b.id ${whereClause}`
-    const whereParams = params.slice(0, Math.max(0, params.length - 2))
+    const { sql, params, countSql, countParams, limit } = buildProductQuery(filters)
 
     const [products, countResult] = await Promise.all([
       query(sql, params),
-      queryOne(countSql, whereParams),
+      queryOne(countSql, countParams),
     ])
 
     const total = countResult?.total || 0
