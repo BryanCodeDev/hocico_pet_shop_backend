@@ -14,6 +14,9 @@ import cartRoutes from './routes/cart.js'
 import paymentRoutes from './routes/payments.js'
 import userRoutes from './routes/users.js'
 import adminRoutes from './routes/admin.js'
+import shippingRoutes from './routes/shipping.js'
+import invoiceRoutes from './routes/invoices.js'
+import stockRoutes from './routes/stock.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { notFound } from './middleware/notFound.js'
 
@@ -58,6 +61,9 @@ app.use('/api/cart', cartRoutes)
 app.use('/api/payments', paymentRoutes)
 app.use('/api/users', userRoutes)
 app.use('/api/admin', adminRoutes)
+app.use('/api/shipping-zones', shippingRoutes)
+app.use('/api/admin/invoices', invoiceRoutes)
+app.use('/api/admin/stock', stockRoutes)
 
 app.use(notFound)
 app.use(errorHandler)

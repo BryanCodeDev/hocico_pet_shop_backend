@@ -83,12 +83,22 @@ export const orderValidation = [
   body('customerPhone').trim().notEmpty().withMessage('Teléfono es requerido'),
   body('address').trim().notEmpty().withMessage('Dirección es requerida'),
   body('city').trim().notEmpty().withMessage('Ciudad es requerida'),
-  body('province').trim().notEmpty().withMessage('Provincia es requerida'),
+  body('province').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
+  body('department').optional({ checkFalsy: true }).trim().isLength({ max: 100 }),
+  body('province').custom((value, { req }) => {
+    if (!value && !req.body.department) {
+      throw new Error('Provincia es requerida')
+    }
+    return true
+  }),
   body('notes').optional().trim(),
   body('items').isArray({ min: 1 }).withMessage('El pedido debe tener al menos un producto'),
   body('items.*.productId').isInt({ min: 1 }).withMessage('Producto inválido'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Cantidad inválida'),
-  body('paymentMethod').isIn(['mercadopago', 'whatsapp', 'bank_transfer', 'cash_on_delivery']).withMessage('Método de pago inválido'),
+  body('paymentMethod').isIn(['wompi', 'mercadopago', 'whatsapp', 'bank_transfer', 'cash_on_delivery']).withMessage('Método de pago inválido'),
+  body('customerDocumentType').optional().isIn(['CC', 'NIT', 'CE', 'PASSPORT']).withMessage('Tipo de documento inválido'),
+  body('customerDocumentNumber').optional().trim().notEmpty().withMessage('Número de documento es requerido').isLength({ max: 20 }).withMessage('Número de documento inválido'),
+  body('shippingZoneId').optional().isInt({ min: 1 }).withMessage('Zona de envío inválida'),
   validate,
 ]
 
@@ -113,5 +123,23 @@ export const paginationValidation = [
   query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
   query('sort').optional().trim(),
   query('order').optional().isIn(['ASC', 'DESC']),
+  validate,
+]
+
+export const orderIdParamValidation = [
+  param('orderId').isInt({ min: 1 }).withMessage('ID de pedido inválido'),
+  validate,
+]
+
+export const productIdParamValidation = [
+  param('productId').isInt({ min: 1 }).withMessage('ID de producto inválido'),
+  validate,
+]
+
+export const stockAdjustValidation = [
+  body('productId').isInt({ min: 1 }).withMessage('Producto inválido'),
+  body('type').isIn(['in', 'adjustment']).withMessage('Tipo de movimiento inválido'),
+  body('quantity').isInt({ min: -999999, max: 999999 }).withMessage('Cantidad inválida').custom(value => value === 0 ? false : true).withMessage('La cantidad no puede ser cero'),
+  body('reason').optional().trim().isLength({ max: 255 }),
   validate,
 ]

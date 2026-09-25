@@ -11,13 +11,28 @@ export async function createOrder(req, res) {
   }
 
   try {
-    const { customerName, customerEmail, customerPhone, address, city, province, notes, items, paymentMethod } = req.body
+    const { customerName, customerEmail, customerPhone, address, city, notes, items, paymentMethod, customerDocumentType, customerDocumentNumber } = req.body
+    const docType = customerDocumentType || 'CC'
+    const docNumber = (customerDocumentNumber || '').toString()
+    const normalizedPaymentMethod = paymentMethod === 'mercadopago' ? 'wompi' : paymentMethod
+    const province = (req.body.province || req.body.department || '').trim()
     const userId = req.user?.id || null
     const orderNumber = generateOrderNumber()
 
     const orderId = await transaction(async (conn) => {
+      const [zoneRows] = await conn.execute(
+        `SELECT cost FROM shipping_zones
+         WHERE LOWER(TRIM(city)) = LOWER(TRIM(?)) AND is_active = TRUE
+         LIMIT 1`,
+        [city]
+      )
+      const shippingCost = zoneRows.length
+        ? Math.round(parseFloat(zoneRows[0].cost) * 100) / 100
+        : 0
+
       let subtotal = 0
       let discount = 0
+      const orderItems = []
 
       for (const item of items) {
         const quantity = Number(item.quantity)
@@ -69,26 +84,33 @@ export async function createOrder(req, res) {
         )
 
         await conn.execute('UPDATE products SET stock = stock - ? WHERE id = ?', [quantity, product.id])
+
+        orderItems.push({ productId: product.id, quantity, name: product.name })
       }
 
-      const total = subtotal
+      const total = Math.round((subtotal - discount + shippingCost) * 100) / 100
+
       const [orderResult] = await conn.execute(
         `INSERT INTO orders (
           user_id, order_number, status, payment_status, payment_method,
           subtotal, discount, shipping_cost, total, currency, external_reference,
-          customer_name, customer_email, customer_phone, address, city, province, notes
-        ) VALUES (?, ?, 'pending', 'pending', ?, ?, ?, 0, ?, 'COP', ?, ?, ?, ?, ?, ?, ?, ?)`,
+          customer_name, customer_email, customer_phone, customer_document_type, customer_document_number,
+          address, city, province, notes
+        ) VALUES (?, ?, 'pending', 'pending', ?, ?, ?, ?, ?, 'COP', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           userId,
           orderNumber,
-          paymentMethod,
+          normalizedPaymentMethod,
           subtotal,
           discount,
+          shippingCost,
           total,
           orderNumber,
           customerName,
           customerEmail,
           customerPhone,
+          docType,
+          docNumber,
           address,
           city,
           province,
@@ -106,6 +128,14 @@ export async function createOrder(req, res) {
              AND product_sku = ?
            LIMIT 1`,
           [createdOrderId, item.productId, item.sku]
+        )
+      }
+
+      for (const oi of orderItems) {
+        await conn.execute(
+          `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_type, reference_id, created_by)
+           VALUES (?, 'out', ?, ?, 'order', ?, ?)`,
+          [oi.productId, oi.quantity, `Pedido ${orderNumber}`, createdOrderId, userId]
         )
       }
 
@@ -397,12 +427,17 @@ export async function adminUpdateOrderStatus(req, res) {
         await conn.execute('UPDATE orders SET shipped_at = CURRENT_TIMESTAMP WHERE id = ?', [id])
       } else if (status === 'delivered') {
         await conn.execute('UPDATE orders SET delivered_at = CURRENT_TIMESTAMP WHERE id = ?', [id])
-      } else if (status === 'cancelled') {
+       } else if (status === 'cancelled') {
         await conn.execute('UPDATE orders SET cancelled_at = CURRENT_TIMESTAMP WHERE id = ?', [id])
-        // Restore stock
+        // Restore stock and record the movement in the kardex
         const items = await conn.execute('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [id])
         for (const item of items[0]) {
           await conn.execute('UPDATE products SET stock = stock + ? WHERE id = ?', [item.quantity, item.product_id])
+          await conn.execute(
+            `INSERT INTO stock_movements (product_id, type, quantity, reason, reference_type, reference_id, created_by)
+             VALUES (?, 'in', ?, ?, 'order', ?, ?)`,
+            [item.product_id, item.quantity, `Restaurado por cancelación pedido #${id}`, id, req.user.id]
+          )
         }
       } else if (status === 'refunded') {
         await conn.execute('UPDATE orders SET cancelled_at = CURRENT_TIMESTAMP WHERE id = ?', [id])
