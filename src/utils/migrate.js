@@ -143,26 +143,49 @@ const migrations = [
     UNIQUE KEY unique_session_product (session_id, product_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
+  // invoices se crea SIN el FK a orders (se agrega después con ALTER,
+  // porque orders.invoice_id también referencia a invoices → dependencia cruzada)
+  `CREATE TABLE IF NOT EXISTS invoices (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    order_id INT NOT NULL,
+    factus_id VARCHAR(100) NULL,
+    invoice_number VARCHAR(50) NULL,
+    cufe VARCHAR(255) NULL,
+    status ENUM('pending','issued','error','cancelled') DEFAULT 'pending',
+    xml_url VARCHAR(500) NULL,
+    pdf_url VARCHAR(500) NULL,
+    factus_response JSON NULL,
+    error_message TEXT NULL,
+    issued_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_invoices_order (order_id),
+    INDEX idx_invoices_status (status)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
   `CREATE TABLE IF NOT EXISTS orders (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NULL,
     order_number VARCHAR(50) NOT NULL UNIQUE,
     status ENUM('pending', 'paid', 'preparing', 'shipped', 'delivered', 'cancelled', 'refunded') DEFAULT 'pending',
     payment_status ENUM('pending', 'approved', 'rejected', 'cancelled', 'refunded', 'in_process', 'in_mediation', 'charged_back') DEFAULT 'pending',
-    payment_method ENUM('mercadopago', 'whatsapp', 'bank_transfer', 'cash_on_delivery') NOT NULL,
+    payment_method ENUM('wompi', 'whatsapp', 'bank_transfer', 'cash_on_delivery') NOT NULL,
     subtotal DECIMAL(12,2) NOT NULL,
     discount DECIMAL(12,2) DEFAULT 0,
     shipping_cost DECIMAL(12,2) DEFAULT 0,
     total DECIMAL(12,2) NOT NULL,
-    currency VARCHAR(3) DEFAULT 'ARS',
+    currency VARCHAR(3) DEFAULT 'COP',
     customer_name VARCHAR(200) NOT NULL,
     customer_email VARCHAR(255) NOT NULL,
     customer_phone VARCHAR(50) NOT NULL,
+    customer_document_type ENUM('CC','NIT','CE','PASSPORT') NOT NULL DEFAULT 'CC',
+    customer_document_number VARCHAR(20) NOT NULL DEFAULT '',
     address TEXT NOT NULL,
     city VARCHAR(100) NOT NULL,
     province VARCHAR(100) NOT NULL,
     notes TEXT,
     payment_id VARCHAR(100),
+    invoice_id INT NULL,
     external_reference VARCHAR(100),
     paid_at TIMESTAMP NULL,
     shipped_at TIMESTAMP NULL,
@@ -171,13 +194,19 @@ const migrations = [
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL,
     INDEX idx_user (user_id),
     INDEX idx_order_number (order_number),
     INDEX idx_status (status),
     INDEX idx_payment_status (payment_status),
+    INDEX idx_payment_id (payment_id),
     INDEX idx_created (created_at),
     INDEX idx_external_ref (external_reference)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  // Ahora que orders existe, cerramos la dependencia cruzada en invoices
+  `ALTER TABLE invoices
+    ADD CONSTRAINT fk_invoices_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE;`,
 
   `CREATE TABLE IF NOT EXISTS order_items (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -215,24 +244,27 @@ const migrations = [
     id INT AUTO_INCREMENT PRIMARY KEY,
     order_id INT NOT NULL,
     payment_id VARCHAR(100) NOT NULL,
+    reference VARCHAR(100) NULL,
     payment_method_id VARCHAR(100),
     payment_type VARCHAR(50),
     status VARCHAR(50) NOT NULL,
     status_detail VARCHAR(100),
     amount DECIMAL(12,2) NOT NULL,
-    currency VARCHAR(3) DEFAULT 'ARS',
+    currency VARCHAR(3) DEFAULT 'COP',
     fee DECIMAL(12,2) DEFAULT 0,
     net_amount DECIMAL(12,2),
     payer_email VARCHAR(255),
     payer_id VARCHAR(100),
     external_reference VARCHAR(100),
     raw_data JSON,
+    signature_checked BOOLEAN DEFAULT FALSE,
     processed_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
     INDEX idx_order (order_id),
-    INDEX idx_payment_id (payment_id),
+    UNIQUE KEY uniq_payment_id (payment_id),
+    UNIQUE KEY uniq_reference (reference),
     INDEX idx_status (status),
     INDEX idx_external_ref (external_reference)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
@@ -276,42 +308,60 @@ const migrations = [
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
-   `INSERT IGNORE INTO roles (id, name, description, permissions) VALUES
+  `CREATE TABLE IF NOT EXISTS stock_movements (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    product_id INT NOT NULL,
+    type ENUM('in','out','adjustment') NOT NULL,
+    quantity INT NOT NULL,
+    reason VARCHAR(255) NULL,
+    reference_type ENUM('order','manual','purchase') DEFAULT 'manual',
+    reference_id INT NULL,
+    created_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_product (product_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  // ---- Seed mínimo embebido en la migración (roles, categorías, marcas, settings) ----
+  // El resto de productos/usuario admin se maneja desde seed.sql (runSeed) para
+  // no mezclar datos de catálogo dentro de la migración de esquema.
+
+  `INSERT IGNORE INTO roles (id, name, description, permissions) VALUES
   (1, 'admin', 'Administrador completo', '{"all": true}'),
   (2, 'user', 'Usuario registrado', '{"orders": ["read", "create"], "profile": ["read", "update"], "cart": ["read", "create", "update", "delete"]}'),
   (3, 'guest', 'Usuario invitado', '{"cart": ["read", "create", "update", "delete"]}');`,
 
-  `INSERT IGNORE INTO categories (id, name, slug, description, image_url, sort_order, is_active) VALUES
-  (1, 'Audio', 'audio', 'Auriculares, parlantes y accesorios de audio', '/images/categories/audio.jpg', 1, TRUE),
-  (2, 'Smartphones', 'smartphones', 'Teléfonos inteligentes y accesorios', '/images/categories/smartphones.jpg', 2, TRUE),
-  (3, 'Computadores', 'computadores', 'Laptops, desktops y accesorios', '/images/categories/computadores.jpg', 3, TRUE),
-  (4, 'Gaming', 'gaming', 'Consolas, periféricos y accesorios gaming', '/images/categories/gaming.jpg', 4, TRUE),
-  (5, 'Smartwatch', 'smartwatch', 'Relojes inteligentes y wearables', '/images/categories/smartwatch.jpg', 5, TRUE),
-  (6, 'Accesorios', 'accesorios', 'Cables, fundas, soportes y más', '/images/categories/accesorios.jpg', 6, TRUE),
-  (7, 'Cargadores', 'cargadores', 'Cargadores, power banks y adaptadores', '/images/categories/cargadores.jpg', 7, TRUE),
-  (8, 'Periféricos', 'perifericos', 'Teclados, mouse, webcams y más', '/images/categories/perifericos.jpg', 8, TRUE),
-  (9, 'Gadgets', 'gadgets', 'Dispositivos innovadores y tecnología', '/images/categories/gadgets.jpg', 9, TRUE);`,
+  `INSERT IGNORE INTO categories (id, name, slug, description, parent_id, sort_order, is_active) VALUES
+  (1, 'Alimentos', 'alimentos', 'Alimento seco y húmedo para perros y gatos', NULL, 1, TRUE),
+  (2, 'Alimento para Perro', 'alimento-perro', 'Concentrados y alimento húmedo para perros de todas las edades', 1, 1, TRUE),
+  (3, 'Alimento para Gato', 'alimento-gato', 'Concentrados y alimento húmedo para gatos de todas las edades', 1, 2, TRUE),
+  (4, 'Snacks', 'snacks', 'Premios, huesos y galletas para consentir a tu mascota', NULL, 2, TRUE),
+  (5, 'Accesorios', 'accesorios', 'Correas, camas, comederos, transportadoras y más', NULL, 3, TRUE),
+  (6, 'Higiene y Cuidado', 'higiene-cuidado', 'Shampoos, cepillos y productos de aseo', NULL, 4, TRUE);`,
 
-  `INSERT IGNORE INTO brands (id, name, slug, is_active) VALUES
-  (1, 'Apple', 'apple', TRUE),
-  (2, 'Samsung', 'samsung', TRUE),
-  (3, 'Sony', 'sony', TRUE),
-  (4, 'Logitech', 'logitech', TRUE),
-  (5, 'Xiaomi', 'xiaomi', TRUE),
-  (6, 'Microsoft', 'microsoft', TRUE),
-  (7, 'Razer', 'razer', TRUE),
-  (8, 'ASUS', 'asus', TRUE),
-  (9, 'TP-Link', 'tp-link', TRUE),
-  (10, 'Anker', 'anker', TRUE);`,
+  `INSERT IGNORE INTO brands (id, name, slug, description, is_active) VALUES
+  (1, 'Hill''s', 'hills', 'Alimento científico premium para perros y gatos', TRUE),
+  (2, 'Agility Gold', 'agility-gold', 'Alimento balanceado de alto rendimiento', TRUE),
+  (3, 'Genérico', 'generico', 'Accesorios y productos varios sin marca específica', TRUE);`,
+
+  `INSERT IGNORE INTO shipping_zones (city, cost) VALUES
+  ('Mosquera', 0),
+  ('Madrid', 5000),
+  ('Funza', 5000);`,
 
   `INSERT IGNORE INTO settings (\`key\`, value, description) VALUES
   ('site_name', '"Hocico Pet Shop"', 'Nombre del sitio'),
   ('site_url', '"https://hocico.com.co"', 'URL del sitio'),
   ('whatsapp_number', '"573133245600"', 'Número de WhatsApp para pedidos'),
   ('free_shipping_threshold', '100000', 'Monto mínimo para envío gratis'),
-  ('default_currency', '"ARS"', 'Moneda por defecto'),
-  ('tax_rate', '0.21', 'Tasa de impuesto (21% IVA)'),
-  ('mercadopago_enabled', 'true', 'Habilitar Mercado Pago'),
+  ('default_currency', '"COP"', 'Moneda por defecto'),
+  ('site_currency', '"COP"', 'Moneda del sitio (alias de default_currency)'),
+  ('tax_rate', '0.19', 'Tasa de IVA en Colombia (19%)'),
+  ('wompi_public_key', 'null', 'Llave pública de Wompi (sandbox/producción)'),
+  ('wompi_env', '"sandbox"', 'Entorno de Wompi: sandbox o production'),
+  ('wompi_enabled', 'true', 'Habilitar pagos con Wompi'),
+  ('factus_email', 'null', 'Email de la cuenta Factus'),
   ('maintenance_mode', 'false', 'Modo mantenimiento');`,
 ]
 
